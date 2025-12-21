@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
   SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert
@@ -6,10 +6,11 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-// IMPORT CRITIQUE PERMISSIONS CAMERA
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
+import * as Battery from 'expo-battery';
+import * as Clipboard from 'expo-clipboard';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
@@ -21,11 +22,8 @@ import TacticalMap from './components/TacticalMap';
 
 const App: React.FC = () => {
   useKeepAwake();
-  
-  // HOOK PERMISSION CAMERA
   const [permission, requestPermission] = useCameraPermissions();
 
-  // ETAT INITIAL SÉCURISÉ (lat/lng non vides pour éviter crash carte)
   const [user, setUser] = useState<UserData>({
     id: '', callsign: '', role: OperatorRole.OPR,
     status: OperatorStatus.CLEAR, isTx: false,
@@ -44,7 +42,6 @@ const App: React.FC = () => {
 
   const [silenceMode, setSilenceMode] = useState(false);
   const [isPingMode, setIsPingMode] = useState(false);
-  // Mode carte incluant Satellite
   const [mapMode, setMapMode] = useState<'dark' | 'light' | 'satellite'>('dark');
   const [showTrails, setShowTrails] = useState(true);
   const [voxActive, setVoxActive] = useState(false);
@@ -59,6 +56,13 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  useEffect(() => {
+    const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => {
+      setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }));
+    });
+    return () => sub && sub.remove();
+  }, []);
+
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
     setToast({ msg, type });
     if (type === 'error') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -66,31 +70,23 @@ const App: React.FC = () => {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  // --- LOGIQUE DÉCONNEXION ---
   const handleLogout = () => {
-    Alert.alert(
-      "Déconnexion",
-      "Quitter la session et retourner à l'accueil ?",
-      [
-        { text: "Annuler", style: "cancel" },
-        { 
-          text: "Déconnexion", 
-          style: "destructive", 
-          onPress: () => {
-             if (peerRef.current) peerRef.current.destroy();
-             setPeers({});
-             setPings([]);
-             setHostId('');
-             setView('login');
-             audioService.setTx(false);
-             setVoxActive(false);
-          }
-        }
-      ]
-    );
+    Alert.alert("Déconnexion", "Quitter ?", [
+      { text: "Annuler", style: "cancel" },
+      { text: "Quitter", style: "destructive", onPress: () => {
+          if (peerRef.current) peerRef.current.destroy();
+          setPeers({}); setPings([]); setHostId(''); setView('login');
+          audioService.setTx(false); setVoxActive(false);
+      }}
+    ]);
+  };
+
+  const copyToClipboard = async () => {
+    if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié !"); }
   };
 
   const broadcast = useCallback((data: any) => {
+    if (!data.type && data.user) data = { type: 'UPDATE', user: data.user };
     Object.values(connectionsRef.current).forEach((conn: any) => {
       if (conn.open) conn.send(data);
     });
@@ -98,33 +94,38 @@ const App: React.FC = () => {
 
   const handleData = useCallback((data: any, fromId: string) => {
     switch (data.type) {
-      case 'UPDATE_USER':
-        setPeers(prev => ({ ...prev, [fromId]: data.user }));
+      case 'UPDATE': 
+      case 'FULL':   
+        if (data.user) setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
         break;
-      case 'SYNC_PEERS':
-        setPeers(data.peers);
+      case 'SYNC': 
+        if (data.list) {
+            const newPeers: Record<string, UserData> = {};
+            data.list.forEach((u: UserData) => { if(u.id !== user.id) newPeers[u.id] = u; });
+            setPeers(newPeers);
+        }
+        if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
       case 'PING':
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setPings(prev => [...prev, data.ping]);
-        showToast(`CIBLE: ${data.ping.msg}`);
+        showToast(`PING: ${data.ping.msg}`);
         break;
-      case 'UPDATE_PING':
-        setPings(prev => prev.map(p => p.id === data.ping.id ? data.ping : p));
+      case 'PING_MOVE': 
+        setPings(prev => prev.map(p => p.id === data.id ? { ...p, lat: data.lat, lng: data.lng } : p));
         break;
-      case 'DELETE_PING':
-        setPings(prev => prev.filter(p => p.id !== data.pingId));
+      case 'PING_DELETE': 
+        setPings(prev => prev.filter(p => p.id !== data.id));
         break;
       case 'SILENCE':
         setSilenceMode(data.state);
-        showToast(data.state ? "SILENCE RADIO ACTIF" : "FIN DU SILENCE");
+        showToast(data.state ? "SILENCE ACTIF" : "FIN SILENCE");
         break;
     }
-  }, [showToast]);
+  }, [user.id, showToast]);
 
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
-
     const p = new Peer(undefined, CONFIG.PEER_CONFIG as any);
     peerRef.current = p;
 
@@ -132,7 +133,7 @@ const App: React.FC = () => {
       setUser(prev => ({ ...prev, id: pid }));
       if (initialRole === OperatorRole.HOST) {
         setHostId(pid);
-        showToast(`SESSION HOST: ${pid}`);
+        showToast(`HÔTE: ${pid}`);
       } else if (targetHostId) {
         connectToHost(targetHostId);
       }
@@ -143,8 +144,8 @@ const App: React.FC = () => {
       conn.on('data', (data: any) => handleData(data, conn.peer));
       conn.on('open', () => {
         if (initialRole === OperatorRole.HOST) {
-          conn.send({ type: 'SYNC_PEERS', peers });
-          if(silenceMode) conn.send({ type: 'SILENCE', state: true });
+          const list = Object.values(peers); list.push(user);
+          conn.send({ type: 'SYNC', list: list, silence: silenceMode });
         }
       });
     });
@@ -152,13 +153,11 @@ const App: React.FC = () => {
     p.on('call', (call) => {
       if (!audioService.stream) return;
       call.answer(audioService.stream);
-      call.on('stream', (remoteStream) => {
-        audioService.playStream(remoteStream);
-      });
+      call.on('stream', (rs) => audioService.playStream(rs));
     });
     
-    p.on('error', (err) => showToast(`ERR: ${err.type}`, 'error'));
-  }, [peers, handleData, showToast, silenceMode]);
+    p.on('error', (err) => showToast(`Err: ${err.type}`, 'error'));
+  }, [peers, user, handleData, showToast, silenceMode]);
 
   const connectToHost = useCallback((targetId: string) => {
     if (!peerRef.current || !audioService.stream) return;
@@ -166,12 +165,10 @@ const App: React.FC = () => {
     connectionsRef.current[targetId] = conn;
     
     conn.on('open', () => {
-      showToast("CONNECTÉ AU QG");
-      conn.send({ type: 'UPDATE_USER', user });
+      showToast("CONNECTÉ");
+      conn.send({ type: 'FULL', user: user });
       const call = peerRef.current!.call(targetId, audioService.stream!);
-      call.on('stream', (remoteStream) => {
-        audioService.playStream(remoteStream);
-      });
+      call.on('stream', (rs) => audioService.playStream(rs));
     });
     conn.on('data', (data: any) => handleData(data, targetId));
   }, [user, handleData, showToast]);
@@ -179,21 +176,15 @@ const App: React.FC = () => {
   const setStatus = (s: OperatorStatus) => {
     setUser(prev => {
       const u = { ...prev, status: s };
-      broadcast({ type: 'UPDATE_USER', user: u });
+      broadcast({ type: 'UPDATE', user: u });
       return u;
     });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   const startServices = async () => {
-    const audioOk = await audioService.init();
-    if (!audioOk) showToast("ERREUR MICRO", "error");
-    
-    // DEMANDE PERMISSION CAMERA ICI (CRITIQUE POUR LE SCAN)
-    if (!permission?.granted) {
-      const camPerm = await requestPermission();
-      if (!camPerm.granted) showToast("CAMERA REFUSÉE", "error");
-    }
+    await audioService.init();
+    if (!permission?.granted) await requestPermission();
 
     audioService.startMetering((level) => {
       if (audioService.mode === 'vox' && !silenceMode) {
@@ -202,7 +193,7 @@ const App: React.FC = () => {
           audioService.setTx(shouldTx);
           setUser(prev => {
             const u = { ...prev, isTx: shouldTx };
-            broadcast({ type: 'UPDATE_USER', user: u });
+            broadcast({ type: 'UPDATE', user: u });
             return u;
           });
         }
@@ -210,7 +201,7 @@ const App: React.FC = () => {
     });
 
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return showToast("GPS REQUIS", "error");
+    if (status !== 'granted') showToast("GPS Refusé", "error");
 
     Location.watchPositionAsync(
       { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
@@ -219,11 +210,8 @@ const App: React.FC = () => {
         setUser(prev => {
           const newHead = (speed && speed > 0.5 && heading !== null) ? heading : prev.head;
           const newUser = { ...prev, lat: latitude, lng: longitude, head: newHead || prev.head };
-          
-          if (!lastLocationRef.current || 
-              Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || 
-              Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
-            broadcast({ type: 'UPDATE_USER', user: newUser });
+          if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
+            broadcast({ type: 'UPDATE', user: newUser });
             lastLocationRef.current = { lat: latitude, lng: longitude };
           }
           return newUser;
@@ -234,22 +222,15 @@ const App: React.FC = () => {
 
   const handleLogin = async () => {
     const tri = loginInput.toUpperCase();
-    if (tri.length < 2) return showToast("Trigramme trop court", "error");
+    if (tri.length < 2) return;
     setUser(prev => ({ ...prev, callsign: tri }));
     await startServices();
     setView('menu');
   };
 
-  const createSession = () => {
-    const role = OperatorRole.HOST;
-    setUser(prev => ({ ...prev, role }));
-    initPeer(role);
-    setView('ops');
-  };
-
   const joinSession = (id?: string) => {
     const finalId = id || hostInput.toUpperCase();
-    if (!finalId) return showToast("ID Manquant", "error");
+    if (!finalId) return;
     setHostId(finalId);
     const role = OperatorRole.OPR;
     setUser(prev => ({ ...prev, role }));
@@ -262,8 +243,6 @@ const App: React.FC = () => {
     setHostInput(data);
     setTimeout(() => joinSession(data), 500);
   };
-
-  // --- RENDU UI ---
 
   const renderLogin = () => (
     <View style={styles.centerContainer}>
@@ -282,29 +261,24 @@ const App: React.FC = () => {
   const renderMenu = () => (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.menuContainer}>
-        {/* EN-TÊTE MENU AVEC DÉCONNEXION */}
         <View style={{flexDirection: 'row', justifyContent:'space-between', alignItems:'center', marginBottom: 20}}>
-            <Text style={styles.sectionTitle}>DÉPLOIEMENT OPÉRATIONNEL</Text>
+            <Text style={styles.sectionTitle}>DÉPLOIEMENT</Text>
             <TouchableOpacity onPress={handleLogout} style={{padding: 10}}>
                 <MaterialIcons name="power-settings-new" size={24} color="#ef4444" />
             </TouchableOpacity>
         </View>
-
-        <TouchableOpacity onPress={createSession} style={styles.menuCard}>
+        <TouchableOpacity onPress={() => { const role = OperatorRole.HOST; setUser(prev => ({ ...prev, role })); initPeer(role); setView('ops'); }} style={styles.menuCard}>
           <MaterialIcons name="add-circle" size={40} color="#3b82f6" />
           <View style={{marginLeft: 20}}>
             <Text style={styles.menuCardTitle}>Créer Salon</Text>
-            <Text style={styles.menuCardSubtitle}>Hôte / Chef de groupe</Text>
+            <Text style={styles.menuCardSubtitle}>Hôte / Chef</Text>
           </View>
         </TouchableOpacity>
-
         <View style={styles.divider} />
-        
         <View style={styles.joinHeader}>
-            <Text style={styles.sectionTitle}>REJOINDRE CANAL</Text>
+            <Text style={styles.sectionTitle}>REJOINDRE</Text>
             <TouchableOpacity onPress={() => setShowScanner(true)} style={styles.scanBtn}>
-                <MaterialIcons name="qr-code-scanner" size={16} color="#3b82f6" />
-                <Text style={styles.scanBtnText}>SCANNER</Text>
+                <MaterialIcons name="qr-code-scanner" size={16} color="#3b82f6" /><Text style={styles.scanBtnText}>SCANNER</Text>
             </TouchableOpacity>
         </View>
         <TextInput 
@@ -323,31 +297,20 @@ const App: React.FC = () => {
       <View style={{backgroundColor: '#09090b'}}>
           <SafeAreaView style={styles.header}>
             <View style={styles.headerContent}>
-              
-              {/* BOUTON RETOUR (NOUVEAU) */}
               <TouchableOpacity onPress={() => setView('menu')} style={{padding: 8, marginRight: 10}}>
                   <MaterialIcons name="arrow-back" size={24} color="#a1a1aa" />
               </TouchableOpacity>
-
               <View style={{flexDirection: 'row', alignItems: 'center', flex: 1}}>
                 <MaterialIcons name="satellite" size={20} color="#3b82f6" />
                 <Text style={styles.headerTitle}> COM<Text style={{color: '#3b82f6'}}>TAC</Text></Text>
               </View>
-
-              <TouchableOpacity 
-                onPress={() => setView(view === 'map' ? 'ops' : 'map')}
-                style={[styles.navBtn, view === 'map' ? styles.navBtnActive : null]}
-              >
+              <TouchableOpacity onPress={() => setView(view === 'map' ? 'ops' : 'map')} style={[styles.navBtn, view === 'map' ? styles.navBtnActive : null]}>
                 <MaterialIcons name="map" size={16} color={view === 'map' ? 'white' : '#a1a1aa'} />
                 <Text style={[styles.navBtnText, view === 'map' ? {color:'white'} : null]}>MAP</Text>
               </TouchableOpacity>
             </View>
           </SafeAreaView>
-          {silenceMode && (
-             <View style={styles.silenceBanner}>
-                <Text style={styles.silenceText}>SILENCE RADIO ACTIF - ÉCOUTE SEULE</Text>
-             </View>
-          )}
+          {silenceMode && (<View style={styles.silenceBanner}><Text style={styles.silenceText}>SILENCE RADIO</Text></View>)}
       </View>
 
       <View style={styles.mainContent}>
@@ -359,39 +322,25 @@ const App: React.FC = () => {
         ) : (
           <View style={{flex: 1}}>
             <TacticalMap 
-              me={user}
-              peers={peers}
-              pings={pings}
-              mapMode={mapMode}
-              showTrails={showTrails}
-              pingMode={isPingMode}
+              me={user} peers={peers} pings={pings} mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
               onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
               onPingMove={(p) => { 
                 setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
-                broadcast({ type: 'UPDATE_PING', ping: p });
+                broadcast({ type: 'PING_MOVE', id: p.id, lat: p.lat, lng: p.lng }); 
               }}
               onPingDelete={(id) => {
                 setPings(prev => prev.filter(p => p.id !== id));
-                broadcast({ type: 'DELETE_PING', pingId: id });
+                broadcast({ type: 'PING_DELETE', id: id });
               }}
             />
-            
             <View style={styles.mapControls}>
-                {/* SWITCH SATELLITE / DARK / LIGHT */}
-                <TouchableOpacity 
-                    onPress={() => setMapMode(m => m === 'dark' ? 'light' : m === 'light' ? 'satellite' : 'dark')} 
-                    style={styles.mapBtn}
-                >
+                <TouchableOpacity onPress={() => setMapMode(m => m === 'dark' ? 'light' : m === 'light' ? 'satellite' : 'dark')} style={styles.mapBtn}>
                     <MaterialIcons name={mapMode === 'dark' ? 'dark-mode' : mapMode === 'light' ? 'light-mode' : 'satellite'} size={24} color="#d4d4d8" />
                 </TouchableOpacity>
-
                 <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
                     <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
                 </TouchableOpacity>
-                <TouchableOpacity 
-                    onPress={() => setIsPingMode(!isPingMode)} 
-                    style={[styles.mapBtn, isPingMode ? {backgroundColor: '#dc2626', borderColor: '#f87171'} : null]}
-                >
+                <TouchableOpacity onPress={() => setIsPingMode(!isPingMode)} style={[styles.mapBtn, isPingMode ? {backgroundColor: '#dc2626', borderColor: '#f87171'} : null]}>
                     <MaterialIcons name="ads-click" size={24} color="white" />
                 </TouchableOpacity>
             </View>
@@ -403,62 +352,30 @@ const App: React.FC = () => {
         <View style={styles.statusRow}>
             {user.role === OperatorRole.HOST ? (
                <TouchableOpacity 
-                  onPress={() => {
-                    const newState = !silenceMode;
-                    setSilenceMode(newState);
-                    broadcast({ type: 'SILENCE', state: newState });
-                    showToast(newState ? "SILENCE ACTIVÉ" : "SILENCE DÉSACTIVÉ");
-                    if (newState) { setVoxActive(false); audioService.setTx(false); setUser(prev => ({...prev, isTx: false})); }
-                  }}
-                  style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444', borderColor: '#fff'} : {borderColor: '#ef4444'}]}
+                  onPress={() => { const ns = !silenceMode; setSilenceMode(ns); broadcast({ type: 'SILENCE', state: ns }); if(ns) {setVoxActive(false); audioService.setTx(false);} }}
+                  style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444'} : {borderColor: '#ef4444'}]}
                >
                    <Text style={[styles.statusBtnText, silenceMode ? {color:'white'} : {color: '#ef4444'}]}>SILENCE</Text>
                </TouchableOpacity>
             ) : null}
-
             {[OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
-                <TouchableOpacity 
-                    key={s} onPress={() => setStatus(s)}
-                    style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}
-                >
+                <TouchableOpacity key={s} onPress={() => setStatus(s)} style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}>
                     <Text style={[styles.statusBtnText, user.status === s ? {color:'white'} : null]}>{s}</Text>
                 </TouchableOpacity>
             ))}
         </View>
-
         <View style={styles.controlsRow}>
-            <TouchableOpacity 
-                onPress={() => { setVoxActive(!voxActive); audioService.toggleVox(); }}
-                style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a', borderColor:'#4ade80'} : null]}
-            >
+            <TouchableOpacity onPress={() => { setVoxActive(!voxActive); audioService.toggleVox(); }} style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}>
                 <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
             </TouchableOpacity>
-
-            <TouchableOpacity
-                onPressIn={() => {
-                    if (silenceMode && user.role !== OperatorRole.HOST) return showToast("SILENCE RADIO", "error");
-                    if (!voxActive) { 
-                        audioService.setTx(true); 
-                        setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE_USER', user:u}); return u; }); 
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
-                    }
-                }}
-                onPressOut={() => {
-                    if (!voxActive) { 
-                        audioService.setTx(false); 
-                        setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE_USER', user:u}); return u; }); 
-                    }
-                }}
-                style={[
-                    styles.pttBtn, 
-                    user.isTx ? {backgroundColor: '#2563eb', borderColor: 'white'} : null,
-                    silenceMode && user.role !== OperatorRole.HOST ? {borderColor: '#333', opacity: 0.5} : null
-                ]}
+            <TouchableOpacity 
+                onPressIn={() => { if(silenceMode && user.role !== OperatorRole.HOST) return; if(!voxActive) { audioService.setTx(true); setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}} 
+                onPressOut={() => { if(!voxActive) { audioService.setTx(false); setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); }}} 
+                style={[styles.pttBtn, user.isTx ? {backgroundColor: '#2563eb'} : null, silenceMode && user.role !== OperatorRole.HOST ? {opacity:0.5} : null]}
                 disabled={silenceMode && user.role !== OperatorRole.HOST}
             >
                 <MaterialIcons name="mic" size={40} color={user.isTx ? 'white' : '#3f3f46'} />
             </TouchableOpacity>
-
             <TouchableOpacity onPress={() => setShowQRModal(true)} style={styles.qrBtn}>
                 <MaterialIcons name="qr-code-2" size={24} color="#d4d4d8" />
             </TouchableOpacity>
@@ -478,15 +395,17 @@ const App: React.FC = () => {
         <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
                 <Text style={styles.modalTitle}>ID OPÉRATEUR</Text>
-                <QRCode value={user.id || 'N/A'} size={200} />
-                <Text style={styles.qrId}>{user.id}</Text>
-                <TouchableOpacity onPress={() => setShowQRModal(false)} style={styles.closeBtn}>
-                    <Text style={styles.closeBtnText}>FERMER</Text>
-                </TouchableOpacity>
+                {user.id ? (
+                    <TouchableOpacity onPress={copyToClipboard} style={{alignItems:'center'}}>
+                        <QRCode value={user.id} size={200} />
+                        <Text style={[styles.qrId, {marginTop: 15, fontWeight:'bold'}]}>{user.id}</Text>
+                        <Text style={{fontSize:10, color:'#666'}}>Appuyer pour copier</Text>
+                    </TouchableOpacity>
+                ) : <Text style={{color:'#666'}}>Chargement...</Text>}
+                <TouchableOpacity onPress={() => setShowQRModal(false)} style={styles.closeBtn}><Text style={styles.closeBtnText}>FERMER</Text></TouchableOpacity>
             </View>
         </View>
       </Modal>
-
       <Modal visible={showScanner} animationType="slide">
         <View style={{flex: 1, backgroundColor: 'black'}}>
              <CameraView style={{flex: 1}} onBarcodeScanned={handleScannerBarCodeScanned} barcodeScannerSettings={{barcodeTypes: ["qr"]}} />
@@ -495,36 +414,23 @@ const App: React.FC = () => {
              </TouchableOpacity>
         </View>
       </Modal>
-
       <Modal visible={showPingModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
             <View style={[styles.modalContent, {backgroundColor: '#18181b'}]}>
                 <Text style={[styles.modalTitle, {color: 'white'}]}>NOUVEAU PING</Text>
-                <TextInput style={styles.pingInput} placeholder="NOM DU PING..." placeholderTextColor="#71717a" value={pingMsgInput} onChangeText={setPingMsgInput} autoFocus />
+                <TextInput style={styles.pingInput} placeholder="Message..." placeholderTextColor="#71717a" value={pingMsgInput} onChangeText={setPingMsgInput} autoFocus />
                 <View style={{flexDirection: 'row', gap: 10}}>
                     <TouchableOpacity onPress={() => setShowPingModal(false)} style={[styles.modalBtn, {backgroundColor: '#27272a'}]}>
                         <Text style={{color: '#a1a1aa', fontWeight:'bold'}}>ANNULER</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => {
-                        if (tempPingLoc) {
-                            const ping: PingData = { id: Date.now().toString(), lat: tempPingLoc.lat, lng: tempPingLoc.lng, msg: pingMsgInput || "CIBLE", sender: user.callsign, timestamp: Date.now() };
-                            setPings(prev => [...prev, ping]);
-                            broadcast({ type: 'PING', ping });
-                        }
-                        setIsPingMode(false); setShowPingModal(false); setTempPingLoc(null); setPingMsgInput('');
-                    }} style={[styles.modalBtn, {backgroundColor: '#2563eb'}]}>
+                    <TouchableOpacity onPress={() => { if(tempPingLoc) { const ping: PingData = { id: Date.now().toString(), lat: tempPingLoc.lat, lng: tempPingLoc.lng, msg: pingMsgInput || "CIBLE", sender: user.callsign, timestamp: Date.now() }; setPings(prev => [...prev, ping]); broadcast({ type: 'PING', ping }); } setIsPingMode(false); setShowPingModal(false); setTempPingLoc(null); setPingMsgInput(''); }} style={[styles.modalBtn, {backgroundColor: '#2563eb'}]}>
                         <Text style={{color: 'white', fontWeight:'bold'}}>ENVOYER</Text>
                     </TouchableOpacity>
                 </View>
             </View>
         </View>
       </Modal>
-
-      {toast && (
-        <View style={[styles.toast, toast.type === 'error' ? {backgroundColor: '#7f1d1d'} : null]}>
-            <Text style={styles.toastText}>{toast.msg}</Text>
-        </View>
-      )}
+      {toast && (<View style={[styles.toast, toast.type === 'error' ? {backgroundColor: '#7f1d1d'} : null]}><Text style={styles.toastText}>{toast.msg}</Text></View>)}
     </View>
   );
 };
