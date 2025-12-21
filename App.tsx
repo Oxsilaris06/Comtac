@@ -1,12 +1,12 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
-  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar 
+  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-// Import du hook de permission caméra
+// IMPORT CRITIQUE PERMISSIONS CAMERA
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -25,6 +25,7 @@ const App: React.FC = () => {
   // HOOK PERMISSION CAMERA
   const [permission, requestPermission] = useCameraPermissions();
 
+  // ETAT INITIAL SÉCURISÉ (lat/lng non vides pour éviter crash carte)
   const [user, setUser] = useState<UserData>({
     id: '', callsign: '', role: OperatorRole.OPR,
     status: OperatorStatus.CLEAR, isTx: false,
@@ -43,7 +44,8 @@ const App: React.FC = () => {
 
   const [silenceMode, setSilenceMode] = useState(false);
   const [isPingMode, setIsPingMode] = useState(false);
-  const [mapMode, setMapMode] = useState<'dark' | 'light'>('dark');
+  // Mode carte incluant Satellite
+  const [mapMode, setMapMode] = useState<'dark' | 'light' | 'satellite'>('dark');
   const [showTrails, setShowTrails] = useState(true);
   const [voxActive, setVoxActive] = useState(false);
   
@@ -63,6 +65,30 @@ const App: React.FC = () => {
     else Haptics.selectionAsync();
     setTimeout(() => setToast(null), 3000);
   }, []);
+
+  // --- LOGIQUE DÉCONNEXION ---
+  const handleLogout = () => {
+    Alert.alert(
+      "Déconnexion",
+      "Quitter la session et retourner à l'accueil ?",
+      [
+        { text: "Annuler", style: "cancel" },
+        { 
+          text: "Déconnexion", 
+          style: "destructive", 
+          onPress: () => {
+             if (peerRef.current) peerRef.current.destroy();
+             setPeers({});
+             setPings([]);
+             setHostId('');
+             setView('login');
+             audioService.setTx(false);
+             setVoxActive(false);
+          }
+        }
+      ]
+    );
+  };
 
   const broadcast = useCallback((data: any) => {
     Object.values(connectionsRef.current).forEach((conn: any) => {
@@ -98,7 +124,7 @@ const App: React.FC = () => {
 
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
-    // Utiliser la config existante (host public ou le votre)
+
     const p = new Peer(undefined, CONFIG.PEER_CONFIG as any);
     peerRef.current = p;
 
@@ -163,7 +189,7 @@ const App: React.FC = () => {
     const audioOk = await audioService.init();
     if (!audioOk) showToast("ERREUR MICRO", "error");
     
-    // DEMANDE PERMISSION CAMERA ICI
+    // DEMANDE PERMISSION CAMERA ICI (CRITIQUE POUR LE SCAN)
     if (!permission?.granted) {
       const camPerm = await requestPermission();
       if (!camPerm.granted) showToast("CAMERA REFUSÉE", "error");
@@ -237,6 +263,8 @@ const App: React.FC = () => {
     setTimeout(() => joinSession(data), 500);
   };
 
+  // --- RENDU UI ---
+
   const renderLogin = () => (
     <View style={styles.centerContainer}>
       <MaterialIcons name="fingerprint" size={80} color="#3b82f6" style={{opacity: 0.8, marginBottom: 30}} />
@@ -254,7 +282,14 @@ const App: React.FC = () => {
   const renderMenu = () => (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.menuContainer}>
-        <Text style={styles.sectionTitle}>DÉPLOIEMENT OPÉRATIONNEL</Text>
+        {/* EN-TÊTE MENU AVEC DÉCONNEXION */}
+        <View style={{flexDirection: 'row', justifyContent:'space-between', alignItems:'center', marginBottom: 20}}>
+            <Text style={styles.sectionTitle}>DÉPLOIEMENT OPÉRATIONNEL</Text>
+            <TouchableOpacity onPress={handleLogout} style={{padding: 10}}>
+                <MaterialIcons name="power-settings-new" size={24} color="#ef4444" />
+            </TouchableOpacity>
+        </View>
+
         <TouchableOpacity onPress={createSession} style={styles.menuCard}>
           <MaterialIcons name="add-circle" size={40} color="#3b82f6" />
           <View style={{marginLeft: 20}}>
@@ -262,7 +297,9 @@ const App: React.FC = () => {
             <Text style={styles.menuCardSubtitle}>Hôte / Chef de groupe</Text>
           </View>
         </TouchableOpacity>
+
         <View style={styles.divider} />
+        
         <View style={styles.joinHeader}>
             <Text style={styles.sectionTitle}>REJOINDRE CANAL</Text>
             <TouchableOpacity onPress={() => setShowScanner(true)} style={styles.scanBtn}>
@@ -286,10 +323,17 @@ const App: React.FC = () => {
       <View style={{backgroundColor: '#09090b'}}>
           <SafeAreaView style={styles.header}>
             <View style={styles.headerContent}>
-              <View style={{flexDirection: 'row', alignItems: 'center'}}>
+              
+              {/* BOUTON RETOUR (NOUVEAU) */}
+              <TouchableOpacity onPress={() => setView('menu')} style={{padding: 8, marginRight: 10}}>
+                  <MaterialIcons name="arrow-back" size={24} color="#a1a1aa" />
+              </TouchableOpacity>
+
+              <View style={{flexDirection: 'row', alignItems: 'center', flex: 1}}>
                 <MaterialIcons name="satellite" size={20} color="#3b82f6" />
                 <Text style={styles.headerTitle}> COM<Text style={{color: '#3b82f6'}}>TAC</Text></Text>
               </View>
+
               <TouchableOpacity 
                 onPress={() => setView(view === 'map' ? 'ops' : 'map')}
                 style={[styles.navBtn, view === 'map' ? styles.navBtnActive : null]}
@@ -333,9 +377,14 @@ const App: React.FC = () => {
             />
             
             <View style={styles.mapControls}>
-                <TouchableOpacity onPress={() => setMapMode(m => m === 'dark' ? 'light' : 'dark')} style={styles.mapBtn}>
-                    <MaterialIcons name={mapMode === 'dark' ? 'light-mode' : 'dark-mode'} size={24} color="#d4d4d8" />
+                {/* SWITCH SATELLITE / DARK / LIGHT */}
+                <TouchableOpacity 
+                    onPress={() => setMapMode(m => m === 'dark' ? 'light' : m === 'light' ? 'satellite' : 'dark')} 
+                    style={styles.mapBtn}
+                >
+                    <MaterialIcons name={mapMode === 'dark' ? 'dark-mode' : mapMode === 'light' ? 'light-mode' : 'satellite'} size={24} color="#d4d4d8" />
                 </TouchableOpacity>
+
                 <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
                     <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
                 </TouchableOpacity>
