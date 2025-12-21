@@ -22,7 +22,7 @@ export interface UserData {
   lat: number;
   lng: number;
   head: number;
-  bat: number | null; // Peut être null
+  bat: number | null;
   joinedAt: number;
 }
 
