@@ -1,6 +1,6 @@
 workflows:
   android-debug:
-    name: ComTac v14 Android (APK Debug)
+    name: ComTac v14 Android (Standalone APK)
     max_build_duration: 120
     instance_type: mac_mini_m2
     environment:
@@ -8,28 +8,35 @@ workflows:
         PACKAGE_NAME: "com.tactical.comtac"
     
     scripts:
-      - name: Install Dependencies (Safe Mode)
+      - name: Install Dependencies
         script: | 
-          # 1. Nettoyage radical
           rm -rf node_modules
           rm -f package-lock.json
-          
-          # 2. Installation forcée pour contourner les conflits mineurs
           npm install --legacy-peer-deps
-          
-          # 3. Alignement final sur Expo 51
           npx expo install --fix
 
       - name: Expo Prebuild
         script: | 
-          # Génération propre du projet Android
           npx expo prebuild --platform android --clean
+
+      - name: Force Bundle JS (Correction Ecran Rouge)
+        script: | 
+          # 1. On crée le dossier qui va recevoir le code compilé
+          mkdir -p android/app/src/main/assets
+          
+          # 2. On compile manuellement le JS pour le mettre DANS l'app
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.tsx \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res
 
       - name: Build Android APK
         script: | 
           cd android
           chmod +x gradlew
-          # Expo 51 sur M2 est compatible par défaut, on lance le build standard
+          # On compile l'APK qui contient maintenant le bundle
           ./gradlew assembleDebug
 
     artifacts:
