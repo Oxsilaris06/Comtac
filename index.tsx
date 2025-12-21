@@ -1,8 +1,6 @@
-// 1. IMPORT DES POLYFILLS (OBLIGATOIRE EN PREMIER)
-import './polyfills';
+import './polyfills'; // CRITIQUE : EN PREMIER
 
 import { registerRootComponent } from 'expo';
 import App from './App';
 
-// Lancement de l'application
 registerRootComponent(App);
