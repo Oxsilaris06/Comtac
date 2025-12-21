@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "COM TAC v14",
+    "slug": "comtac-v14",
+    "version": "14.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": ["**/*"],
+    "plugins": [
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Scan QR Tactique",
+          "microphonePermission": "Radio VoIP"
+        }
+      ],
+      "expo-camera",
+      "expo-location"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": ["audio", "voip", "location"]
+      }
+    },
+    "android": {
+      "package": "com.tactical.comtac",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE"
+      ]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "COM TAC v14.0",
+  "description": "Système de communication tactique et de suivi BFT pour unités de terrain. Inclut VoIP P2P, cartographie en temps réel, statuts opérationnels et canaux sécurisés.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
