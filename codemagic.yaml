@@ -10,33 +10,24 @@ workflows:
     scripts:
       - name: Install Dependencies
         script: | 
-          # Nettoyage préventif
-          rm -rf node_modules
+          # On supprime les vieux verrous pour forcer la mise à jour
           rm -f package-lock.json
-          
-          # Installation propre
           npm install
           
-          # S'assure que les versions sont compatibles Expo 50
+          # Cette commande va aligner toutes les versions sur le SDK 51
           npx expo install --fix
 
       - name: Expo Prebuild
         script: | 
-          # Génération des dossiers natifs
+          # On génère le projet natif proprement
           npx expo prebuild --platform android --clean
 
-      - name: Build Android APK (Gradle 8.2 fix)
+      - name: Build Android APK
         script: | 
           cd android
-          
-          # FIX CRITIQUE : On impose Gradle 8.2 (Version Goldilocks pour Expo 50)
-          # Ni trop vieux (plante pas les plugins), ni trop récent (plante pas 'release')
-          sed -i '' 's/distributionUrl=.*$/distributionUrl=https\:\/\/services.gradle.org\/distributions\/gradle-8.2-all.zip/g' gradle/wrapper/gradle-wrapper.properties
-          
           chmod +x gradlew
-          
-          # On nettoie et on compile
-          ./gradlew clean assembleDebug
+          # Plus besoin de forcer une version, Expo 51 gère Gradle 8.2+ nativement
+          ./gradlew assembleDebug
 
     artifacts:
       - android/app/build/outputs/apk/debug/*.apk
