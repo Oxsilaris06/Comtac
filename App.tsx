@@ -6,13 +6,13 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-import { CameraView } from 'expo-camera';
+// Import du hook de permission caméra
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
-// Vos imports
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
@@ -21,8 +21,10 @@ import TacticalMap from './components/TacticalMap';
 
 const App: React.FC = () => {
   useKeepAwake();
+  
+  // HOOK PERMISSION CAMERA
+  const [permission, requestPermission] = useCameraPermissions();
 
-  // --- 1. ETAT INITIAL SÉCURISÉ (Lat/Lng par défaut pour éviter le crash au boot) ---
   const [user, setUser] = useState<UserData>({
     id: '', callsign: '', role: OperatorRole.OPR,
     status: OperatorStatus.CLEAR, isTx: false,
@@ -96,7 +98,7 @@ const App: React.FC = () => {
 
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
-
+    // Utiliser la config existante (host public ou le votre)
     const p = new Peer(undefined, CONFIG.PEER_CONFIG as any);
     peerRef.current = p;
 
@@ -161,6 +163,12 @@ const App: React.FC = () => {
     const audioOk = await audioService.init();
     if (!audioOk) showToast("ERREUR MICRO", "error");
     
+    // DEMANDE PERMISSION CAMERA ICI
+    if (!permission?.granted) {
+      const camPerm = await requestPermission();
+      if (!camPerm.granted) showToast("CAMERA REFUSÉE", "error");
+    }
+
     audioService.startMetering((level) => {
       if (audioService.mode === 'vox' && !silenceMode) {
         const shouldTx = level > CONFIG.VAD_THRESHOLD;
@@ -227,70 +235,6 @@ const App: React.FC = () => {
     setShowScanner(false);
     setHostInput(data);
     setTimeout(() => joinSession(data), 500);
-  };
-
-  const handleLongPressMap = (e: any) => {
-    const coord = e.nativeEvent.coordinate;
-    setTempPingLoc({ lat: coord.latitude, lng: coord.longitude });
-    setShowPingModal(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-  };
-
-  const confirmPing = () => {
-    const msg = pingMsgInput || "CIBLE";
-    if (tempPingLoc) {
-        const ping: PingData = {
-          id: Date.now().toString(), lat: tempPingLoc.lat, lng: tempPingLoc.lng,
-          msg, sender: user.callsign, timestamp: Date.now()
-        };
-        setPings(prev => [...prev, ping]);
-        broadcast({ type: 'PING', ping });
-    }
-    setIsPingMode(false);
-    setShowPingModal(false);
-    setTempPingLoc(null);
-    setPingMsgInput('');
-  };
-
-  const toggleSilence = () => {
-    if (user.role !== OperatorRole.HOST) return showToast("Hôte requis", "error");
-    const newState = !silenceMode;
-    setSilenceMode(newState);
-    broadcast({ type: 'SILENCE', state: newState });
-    showToast(newState ? "SILENCE RADIO ACTIVÉ" : "SILENCE DÉSACTIVÉ");
-    if (newState) {
-        setVoxActive(false);
-        audioService.setTx(false);
-        setUser(prev => ({...prev, isTx: false}));
-    }
-  };
-
-  const handlePTTPressIn = () => {
-    if (silenceMode && user.role !== OperatorRole.HOST) {
-        showToast("SILENCE RADIO EN COURS", "error");
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        return;
-    }
-    if (!voxActive) { 
-        audioService.setTx(true); 
-        setUser(prev => { 
-            const u = {...prev, isTx:true}; 
-            broadcast({type:'UPDATE_USER', user:u}); 
-            return u; 
-        }); 
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
-    }
-  };
-
-  const handlePTTPressOut = () => {
-    if (!voxActive) { 
-        audioService.setTx(false); 
-        setUser(prev => { 
-            const u = {...prev, isTx:false}; 
-            broadcast({type:'UPDATE_USER', user:u}); 
-            return u; 
-        }); 
-    }
   };
 
   const renderLogin = () => (
@@ -370,7 +314,6 @@ const App: React.FC = () => {
           </View>
         ) : (
           <View style={{flex: 1}}>
-            {/* 2. APPEL CORRECT DE TACTICALMAP AVEC "me={user}" (Vital) */}
             <TacticalMap 
               me={user}
               peers={peers}
@@ -411,7 +354,13 @@ const App: React.FC = () => {
         <View style={styles.statusRow}>
             {user.role === OperatorRole.HOST ? (
                <TouchableOpacity 
-                  onPress={toggleSilence}
+                  onPress={() => {
+                    const newState = !silenceMode;
+                    setSilenceMode(newState);
+                    broadcast({ type: 'SILENCE', state: newState });
+                    showToast(newState ? "SILENCE ACTIVÉ" : "SILENCE DÉSACTIVÉ");
+                    if (newState) { setVoxActive(false); audioService.setTx(false); setUser(prev => ({...prev, isTx: false})); }
+                  }}
                   style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444', borderColor: '#fff'} : {borderColor: '#ef4444'}]}
                >
                    <Text style={[styles.statusBtnText, silenceMode ? {color:'white'} : {color: '#ef4444'}]}>SILENCE</Text>
@@ -437,8 +386,20 @@ const App: React.FC = () => {
             </TouchableOpacity>
 
             <TouchableOpacity
-                onPressIn={handlePTTPressIn}
-                onPressOut={handlePTTPressOut}
+                onPressIn={() => {
+                    if (silenceMode && user.role !== OperatorRole.HOST) return showToast("SILENCE RADIO", "error");
+                    if (!voxActive) { 
+                        audioService.setTx(true); 
+                        setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE_USER', user:u}); return u; }); 
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
+                    }
+                }}
+                onPressOut={() => {
+                    if (!voxActive) { 
+                        audioService.setTx(false); 
+                        setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE_USER', user:u}); return u; }); 
+                    }
+                }}
                 style={[
                     styles.pttBtn, 
                     user.isTx ? {backgroundColor: '#2563eb', borderColor: 'white'} : null,
@@ -495,7 +456,14 @@ const App: React.FC = () => {
                     <TouchableOpacity onPress={() => setShowPingModal(false)} style={[styles.modalBtn, {backgroundColor: '#27272a'}]}>
                         <Text style={{color: '#a1a1aa', fontWeight:'bold'}}>ANNULER</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={confirmPing} style={[styles.modalBtn, {backgroundColor: '#2563eb'}]}>
+                    <TouchableOpacity onPress={() => {
+                        if (tempPingLoc) {
+                            const ping: PingData = { id: Date.now().toString(), lat: tempPingLoc.lat, lng: tempPingLoc.lng, msg: pingMsgInput || "CIBLE", sender: user.callsign, timestamp: Date.now() };
+                            setPings(prev => [...prev, ping]);
+                            broadcast({ type: 'PING', ping });
+                        }
+                        setIsPingMode(false); setShowPingModal(false); setTempPingLoc(null); setPingMsgInput('');
+                    }} style={[styles.modalBtn, {backgroundColor: '#2563eb'}]}>
                         <Text style={{color: 'white', fontWeight:'bold'}}>ENVOYER</Text>
                     </TouchableOpacity>
                 </View>
