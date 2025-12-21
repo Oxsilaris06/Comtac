@@ -14,13 +14,16 @@ workflows:
 
       - name: Run Expo Prebuild
         script: | 
-          # Correction : Suppression du flag incompatible
           npx expo prebuild --platform android
 
       - name: Build Android APK
         script: | 
           cd android
+          # Correctif critique pour la version de Gradle
           chmod +x gradlew
+          ./gradlew wrapper --gradle-version 8.1.1 --distribution-type all
+          
+          # Compilation
           ./gradlew assembleDebug
 
     artifacts:
