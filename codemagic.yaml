@@ -16,14 +16,19 @@ workflows:
         script: | 
           npx expo prebuild --platform android
 
-      - name: Build Android APK
+      - name: Build Android APK (Force Gradle 8.1.1)
         script: | 
           cd android
-          # Correctif critique pour la version de Gradle
-          chmod +x gradlew
-          ./gradlew wrapper --gradle-version 8.1.1 --distribution-type all
           
-          # Compilation
+          # METHODE FORTE : On réécrit le fichier de config pour imposer Gradle 8.1.1
+          # Cela empêche le téléchargement automatique de la version 8.3 qui fait planter le build
+          sed -i '' 's/distributionUrl=.*$/distributionUrl=https\:\/\/services.gradle.org\/distributions\/gradle-8.1.1-all.zip/g' gradle/wrapper/gradle-wrapper.properties
+          
+          # Vérification (pour les logs)
+          echo "Vérification de la version forcée :"
+          cat gradle/wrapper/gradle-wrapper.properties
+          
+          chmod +x gradlew
           ./gradlew assembleDebug
 
     artifacts:
