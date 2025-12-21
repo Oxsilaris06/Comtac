@@ -8,30 +8,35 @@ workflows:
         PACKAGE_NAME: "com.tactical.comtac"
     
     scripts:
-      - name: Install & Fix Dependencies
+      - name: Install Dependencies
         script: | 
-          # Installe les paquets de base
+          # Nettoyage préventif
+          rm -rf node_modules
+          rm -f package-lock.json
+          
+          # Installation propre
           npm install
           
-          # COMMANDE MAGIQUE : Aligne toutes les versions des libs sur le standard Expo 50
-          # Cela corrige les bugs de compatibilité Gradle/Java
+          # S'assure que les versions sont compatibles Expo 50
           npx expo install --fix
 
-      - name: Expo Prebuild (Clean)
+      - name: Expo Prebuild
         script: | 
-          # Génère le projet Android en partant de zéro (--clean)
+          # Génération des dossiers natifs
           npx expo prebuild --platform android --clean
 
-      - name: Build Android APK
+      - name: Build Android APK (Gradle 8.2 fix)
         script: | 
           cd android
+          
+          # FIX CRITIQUE : On impose Gradle 8.2 (Version Goldilocks pour Expo 50)
+          # Ni trop vieux (plante pas les plugins), ni trop récent (plante pas 'release')
+          sed -i '' 's/distributionUrl=.*$/distributionUrl=https\:\/\/services.gradle.org\/distributions\/gradle-8.2-all.zip/g' gradle/wrapper/gradle-wrapper.properties
+          
           chmod +x gradlew
           
-          # Nettoyage préalable pour éviter les résidus de l'ancien build
-          ./gradlew clean
-          
-          # Compilation standard (on laisse Expo gérer la version de Gradle)
-          ./gradlew assembleDebug
+          # On nettoie et on compile
+          ./gradlew clean assembleDebug
 
     artifacts:
       - android/app/build/outputs/apk/debug/*.apk
