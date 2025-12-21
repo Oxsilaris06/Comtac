@@ -10,23 +10,27 @@ workflows:
     scripts:
       - name: Install Dependencies
         script: | 
-          # On supprime les vieux verrous pour forcer la mise à jour
+          # On nettoie pour éviter les conflits cachés
+          rm -rf node_modules
           rm -f package-lock.json
-          npm install
           
-          # Cette commande va aligner toutes les versions sur le SDK 51
+          # LE SECRET EST ICI : --legacy-peer-deps
+          # Cela force l'installation malgré le conflit de version du plugin WebRTC
+          npm install --legacy-peer-deps
+          
+          # On laisse Expo aligner les versions des librairies principales
           npx expo install --fix
 
       - name: Expo Prebuild
         script: | 
-          # On génère le projet natif proprement
+          # Génération propre du projet Android
           npx expo prebuild --platform android --clean
 
       - name: Build Android APK
         script: | 
           cd android
           chmod +x gradlew
-          # Plus besoin de forcer une version, Expo 51 gère Gradle 8.2+ nativement
+          # Avec Expo 51, plus besoin de hacks Gradle, ça marche nativement
           ./gradlew assembleDebug
 
     artifacts:
