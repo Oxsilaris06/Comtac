@@ -1,11 +1,13 @@
 import 'react-native-get-random-values';
 import { registerGlobals } from 'react-native-webrtc';
 
-// 1. Active WebRTC
+// 1. Activation WebRTC
 registerGlobals();
 
-// 2. Simule l'environnement Navigateur pour PeerJS
-// PeerJS vérifie souvent window.location et navigator.userAgent
+// 2. Simulation de l'environnement Navigateur pour PeerJS
+// PeerJS vérifie 'window', 'location' et 'navigator' au démarrage.
+// Sans ça, l'erreur "browser-incompatible" apparaît.
+
 if (typeof window === 'undefined') {
     global.window = global;
 }
@@ -16,16 +18,16 @@ if (!global.window.location) {
         host: 'localhost',
         hash: '',
         href: 'https://localhost',
-        search: ''
+        search: '',
+        pathname: '/' // Ajout pour compatibilité stricte
     };
 }
 
 if (!global.navigator.userAgent) {
-    global.navigator.userAgent = 'react-native';
+    global.navigator.userAgent = 'react-native'; // Trompe PeerJS
 }
 
-// Patch pour éviter certains bugs de timer dans PeerJS sur Android
-// (Optionnel mais recommandé pour la stabilité)
+// Patch pour les timers Android parfois instables avec WebRTC
 const originalSetTimeout = setTimeout;
 global.setTimeout = (fn, ms, ...args) => {
     return originalSetTimeout(fn, ms || 0, ...args);
