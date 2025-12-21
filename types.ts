@@ -1,5 +1,3 @@
-// types.ts
-
 export enum OperatorRole {
   HOST = 'HOST',
   OPR = 'OPR',
@@ -20,12 +18,12 @@ export interface UserData {
   callsign: string;
   role: OperatorRole;
   status: OperatorStatus;
-  isTx: boolean;         // En train de transmettre (Parler)
+  isTx: boolean;
   lat: number;
   lng: number;
-  head: number;          // Cap (Heading) en degrés (0-360)
-  bat: number;           // Batterie %
-  joinedAt?: number;     // Timestamp de connexion (pour l'ancienneté)
+  head: number;
+  bat: number | null; // Peut être null
+  joinedAt: number;
 }
 
 export interface PingData {
