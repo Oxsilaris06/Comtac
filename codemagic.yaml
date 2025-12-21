@@ -8,27 +8,29 @@ workflows:
         PACKAGE_NAME: "com.tactical.comtac"
     
     scripts:
-      - name: Install npm dependencies
+      - name: Install & Fix Dependencies
         script: | 
+          # Installe les paquets de base
           npm install
+          
+          # COMMANDE MAGIQUE : Aligne toutes les versions des libs sur le standard Expo 50
+          # Cela corrige les bugs de compatibilité Gradle/Java
+          npx expo install --fix
 
-      - name: Run Expo Prebuild
+      - name: Expo Prebuild (Clean)
         script: | 
-          npx expo prebuild --platform android
+          # Génère le projet Android en partant de zéro (--clean)
+          npx expo prebuild --platform android --clean
 
-      - name: Build Android APK (Force Gradle 8.1.1)
+      - name: Build Android APK
         script: | 
           cd android
-          
-          # METHODE FORTE : On réécrit le fichier de config pour imposer Gradle 8.1.1
-          # Cela empêche le téléchargement automatique de la version 8.3 qui fait planter le build
-          sed -i '' 's/distributionUrl=.*$/distributionUrl=https\:\/\/services.gradle.org\/distributions\/gradle-8.1.1-all.zip/g' gradle/wrapper/gradle-wrapper.properties
-          
-          # Vérification (pour les logs)
-          echo "Vérification de la version forcée :"
-          cat gradle/wrapper/gradle-wrapper.properties
-          
           chmod +x gradlew
+          
+          # Nettoyage préalable pour éviter les résidus de l'ancien build
+          ./gradlew clean
+          
+          # Compilation standard (on laisse Expo gérer la version de Gradle)
           ./gradlew assembleDebug
 
     artifacts:
