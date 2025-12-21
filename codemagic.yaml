@@ -1,0 +1,39 @@
+workflows:
+  android-workflow:
+    name: ComTac v14 Android APK
+    max_build_duration: 120
+    instance_type: mac_mini_m1  # Utilise une machine rapide
+    environment:
+      node: 18.x
+      # Si vous avez besoin de variables d'environnement (ex: clés API), ajoutez-les ici
+      # vars:
+      #   GEMINI_API_KEY: "votre_cle_ici"
+    
+    scripts:
+      - name: Install dependencies
+        script: |
+          npm install
+
+      - name: Expo Prebuild (Génération dossier Android)
+        script: |
+          # Transforme le projet Expo en projet Natif Android
+          npx expo prebuild --platform android --no-interactive
+
+      - name: Build Android APK (Debug)
+        script: |
+          cd android
+          # Rend le script de build exécutable
+          chmod +x gradlew
+          # Lance la compilation de l'APK Debug (pas besoin de signature)
+          ./gradlew assembleDebug
+
+    artifacts:
+      - android/app/build/outputs/apk/debug/*.apk
+
+    publishing:
+      email:
+        recipients:
+          - votre.email@exemple.com # Remplacer par votre email réel
+        notify:
+          success: true
+          failure: true
