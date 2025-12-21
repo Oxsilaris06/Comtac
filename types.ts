@@ -1,28 +1,31 @@
+// types.ts
+
+export enum OperatorRole {
+  HOST = 'HOST',
+  OPR = 'OPR',
+}
 
 export enum OperatorStatus {
   CLEAR = 'CLEAR',
   CONTACT = 'CONTACT',
+  BUSY = 'BUSY',
   APPUI = 'APPUI',
   PROGRESSION = 'PROGRESSION',
-  BUSY = 'BUSY'
 }
 
-export enum OperatorRole {
-  HOST = 'HOST',
-  OPR = 'OPR'
-}
+export type ViewType = 'login' | 'menu' | 'ops' | 'map';
 
 export interface UserData {
   id: string;
   callsign: string;
   role: OperatorRole;
   status: OperatorStatus;
-  lat?: number;
-  lng?: number;
-  head?: number;
-  bat?: number | null;
-  isTx: boolean;
-  joinedAt: number;
+  isTx: boolean;         // En train de transmettre (Parler)
+  lat: number;
+  lng: number;
+  head: number;          // Cap (Heading) en degrés (0-360)
+  bat: number;           // Batterie %
+  joinedAt?: number;     // Timestamp de connexion (pour l'ancienneté)
 }
 
 export interface PingData {
@@ -31,12 +34,5 @@ export interface PingData {
   lng: number;
   msg: string;
   sender: string;
-}
-
-export type ViewType = 'login' | 'menu' | 'ops' | 'map';
-
-export interface PeerData {
-  conn: any;
-  call?: any;
-  data: UserData;
+  timestamp: number;
 }
