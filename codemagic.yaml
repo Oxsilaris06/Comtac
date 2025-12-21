@@ -4,7 +4,7 @@ workflows:
     max_build_duration: 120
     instance_type: mac_mini_m1  # Utilise une machine rapide
     environment:
-      node: 18.x
+      node: 20.x
       # Si vous avez besoin de variables d'environnement (ex: clés API), ajoutez-les ici
       # vars:
       #   GEMINI_API_KEY: "votre_cle_ici"
