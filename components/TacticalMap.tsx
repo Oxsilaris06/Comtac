@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, View, Text, Platform } from 'react-native';
+import { StyleSheet, View, Platform } from 'react-native';
 import MapView, { UrlTile, Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserData, PingData, OperatorStatus } from '../types';
@@ -16,7 +16,7 @@ const COLORS = {
   [OperatorStatus.PROGRESSION]: '#3b82f6',
 };
 
-// VALIDATION STRICTE : Pas de Null Island (0,0)
+// SÉCURITÉ : Ignore 0, null, undefined
 const isValidCoord = (val: any): boolean => {
   return typeof val === 'number' && !isNaN(val) && val !== null && Math.abs(val) > 0.0001;
 };
@@ -45,7 +45,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
   if (mapMode === 'light') currentTileUrl = TILE_URL_LIGHT;
   if (mapMode === 'satellite') currentTileUrl = TILE_URL_SAT;
 
-  // Centrage auto : Seulement si coordonnées valides
   useEffect(() => {
     if (!hasCentered && me && isValidCoord(me.lat) && isValidCoord(me.lng) && mapRef.current) {
         mapRef.current.animateToRegion({
@@ -75,24 +74,23 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
       };
 
       if (me) addPoint('me', me.lat, me.lng);
-      if (peers) Object.values(peers).forEach(p => { if (p) addPoint(p.id, p.lat, p.lng); });
+      if (peers) {
+        Object.values(peers).forEach(p => {
+          if (p) addPoint(p.id, p.lat, p.lng);
+        });
+      }
       return next;
     });
   }, [me?.lat, me?.lng, peers, showTrails]);
 
   const renderMarker = (u: UserData, isMe: boolean) => {
     if (!u || !isValidCoord(u.lat) || !isValidCoord(u.lng)) return null;
-    
     const color = COLORS[u.status] || COLORS.CLEAR;
-    
     return (
       <Marker
         key={u.id}
         coordinate={{ latitude: u.lat, longitude: u.lng }}
-        anchor={{ x: 0.5, y: 0.5 }}
-        flat={true}
-        rotation={u.head || 0}
-        zIndex={isMe ? 100 : 50}
+        anchor={{ x: 0.5, y: 0.5 }} flat={true} rotation={u.head || 0} zIndex={isMe ? 100 : 50}
       >
         <View style={styles.markerContainer}>
           <View style={[styles.labelBadge, { borderColor: color }]}>
@@ -111,21 +109,17 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         style={styles.map}
         provider={PROVIDER_DEFAULT}
         mapType={Platform.OS === 'android' ? "none" : "standard"}
-        rotateEnabled={true}
-        showsUserLocation={false}
+        rotateEnabled={true} showsUserLocation={false}
         onPress={(e) => { if(pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
         onLongPress={(e) => { if(!pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
         initialRegion={{
-            latitude: 48.8566, longitude: 2.3522, // Par défaut sur Paris
-            latitudeDelta: 0.05, longitudeDelta: 0.05,
+            latitude: 48.8566, longitude: 2.3522, latitudeDelta: 0.05, longitudeDelta: 0.05,
         }}
       >
         <UrlTile
           key={mapMode}
           urlTemplate={currentTileUrl}
-          maximumZ={19}
-          flipY={false}
-          zIndex={10} 
+          maximumZ={19} flipY={false} zIndex={10} 
         />
 
         {showTrails && Object.entries(trails).map(([id, coords]) => {
@@ -135,12 +129,8 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
            if (coords.length < 2) return null;
            return (
              <Polyline
-               key={`trail-${id}`}
-               coordinates={coords}
-               strokeColor={color}
-               strokeWidth={isMe ? 3 : 2}
-               lineDashPattern={isMe ? [0] : [5, 5]}
-               zIndex={15}
+               key={`trail-${id}`} coordinates={coords} strokeColor={color} strokeWidth={isMe ? 3 : 2}
+               lineDashPattern={isMe ? [0] : [5, 5]} zIndex={15}
              />
            );
         })}
