@@ -8,17 +8,16 @@ workflows:
         PACKAGE_NAME: "com.tactical.comtac"
     
     scripts:
-      - name: Install Dependencies
+      - name: Install Dependencies (Safe Mode)
         script: | 
-          # On nettoie pour éviter les conflits cachés
+          # 1. Nettoyage radical
           rm -rf node_modules
           rm -f package-lock.json
           
-          # LE SECRET EST ICI : --legacy-peer-deps
-          # Cela force l'installation malgré le conflit de version du plugin WebRTC
+          # 2. Installation forcée pour contourner les conflits mineurs
           npm install --legacy-peer-deps
           
-          # On laisse Expo aligner les versions des librairies principales
+          # 3. Alignement final sur Expo 51
           npx expo install --fix
 
       - name: Expo Prebuild
@@ -30,7 +29,7 @@ workflows:
         script: | 
           cd android
           chmod +x gradlew
-          # Avec Expo 51, plus besoin de hacks Gradle, ça marche nativement
+          # Expo 51 sur M2 est compatible par défaut, on lance le build standard
           ./gradlew assembleDebug
 
     artifacts:
