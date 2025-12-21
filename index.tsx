@@ -1,12 +1,16 @@
+// 1. D'ABORD ET AVANT TOUT : Les polyfills Node.js
+import 'react-native-get-random-values';
+
+// 2. ENSUITE : Expo
 import { registerRootComponent } from 'expo';
 
-// 1. IMPORT DU POLYFILL WEBRTC (CRUCIAL)
-// Cela injecte 'window', 'navigator' et les API web nécessaires à PeerJS
+// 3. PUIS : WebRTC
 import { registerGlobals } from 'react-native-webrtc';
 
-// 2. ACTIVATION IMMÉDIATE (Avant tout import de composant)
+// 4. ACTIVATION
 registerGlobals();
 
+// 5. ENFIN : L'App
 import App from './App';
 
 registerRootComponent(App);
