@@ -1,39 +1,40 @@
 workflows:
-  android-workflow:
-    name: ComTac v14 Android APK
+  android-debug:
+    name: ComTac v14 Android (APK Debug)
     max_build_duration: 120
-    instance_type: mac_mini_m1  # Utilise une machine rapide
+    instance_type: mac_mini_m2
     environment:
-      node: 20.x
-      # Si vous avez besoin de variables d'environnement (ex: clés API), ajoutez-les ici
-      # vars:
-      #   GEMINI_API_KEY: "votre_cle_ici"
+      # Pas de clés de signature (Keystore) nécessaires pour le mode Debug
+      vars:
+        PACKAGE_NAME: "com.tactical.comtac"
+      # On laisse Codemagic gérer la version de Node par défaut (M2 compatible)
     
     scripts:
-      - name: Install dependencies
-        script: |
+      - name: Install npm dependencies
+        script: | 
           npm install
 
-      - name: Expo Prebuild (Génération dossier Android)
-        script: |
-          # Transforme le projet Expo en projet Natif Android
+      - name: Run Expo Prebuild
+        script: | 
+          # C'est l'étape magique qui transforme votre JS en projet Android natif
           npx expo prebuild --platform android --no-interactive
 
-      - name: Build Android APK (Debug)
-        script: |
+      - name: Build Android APK
+        script: | 
           cd android
-          # Rend le script de build exécutable
+          # Rend le script de compilation exécutable
           chmod +x gradlew
-          # Lance la compilation de l'APK Debug (pas besoin de signature)
+          # Compile un APK (pas un Bundle) en mode Debug
           ./gradlew assembleDebug
 
     artifacts:
+      # Récupère tous les fichiers .apk générés
       - android/app/build/outputs/apk/debug/*.apk
 
     publishing:
       email:
         recipients:
-          - votre.email@exemple.com # Remplacer par votre email réel
+          - nicolas.maheux45@gmail.com
         notify:
           success: true
           failure: true
