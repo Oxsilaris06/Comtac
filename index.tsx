@@ -1,11 +1,12 @@
 import { registerRootComponent } from 'expo';
-import { Platform } from 'react-native';
 
-if (Platform.OS !== 'web') {
-  require('react-native-get-random-values');
-  const { registerGlobals } = require('react-native-webrtc');
-  registerGlobals();
-}
+// 1. IMPORT DU POLYFILL WEBRTC (CRUCIAL)
+// Cela injecte 'window', 'navigator' et les API web nécessaires à PeerJS
+import { registerGlobals } from 'react-native-webrtc';
+
+// 2. ACTIVATION IMMÉDIATE (Avant tout import de composant)
+registerGlobals();
 
 import App from './App';
+
 registerRootComponent(App);
