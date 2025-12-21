@@ -15,7 +15,10 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": ["audio", "voip"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -29,16 +32,16 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.WAKE_LOCK"
+        "android.permission.WAKE_LOCK",
+        "android.permission.BATTERY_STATS",
+        "android.permission.BLUETOOTH",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyFakeKey_BypassForOSM_123456789"
         }
       }
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       [
@@ -52,6 +55,24 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24,
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34,
+            "buildToolsVersion": "34.0.0"
+          }
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Autoriser la caméra pour le scan QR",
+          "microphonePermission": "Autoriser le micro pour la communication"
         }
       ]
     ]
