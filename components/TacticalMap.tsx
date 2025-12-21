@@ -1,248 +1,86 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, Text } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT, MapPressEvent } from 'react-native-maps';
-import { MaterialIcons } from '@expo/vector-icons';
-import { UserData, PingData, OperatorRole } from '../types';
-import { STATUS_COLORS } from '../constants';
+import React from 'react';
+import { StyleSheet, View, Text } from 'react-native';
+import MapView, { UrlTile, Marker, LongPressEvent } from 'react-native-maps';
+import { Ping, User } from '../types';
 
 interface TacticalMapProps {
-  me: UserData;
-  peers: Record<string, UserData>;
-  pings: PingData[];
-  onPing: (latlng: any) => void;
-  onPingMove: (ping: PingData) => void;
-  onPingDelete: (pingId: string) => void;
-  pingMode: boolean;
-  mapMode: 'dark' | 'light';
-  showTrails: boolean;
-  clearTrailsTrigger: number;
+  isDarkMode: boolean;
+  user: User; // Pour afficher ma propre position
+  pings: Ping[];
+  onLongPress: (e: LongPressEvent) => void;
 }
 
-const TacticalMap: React.FC<TacticalMapProps> = ({ 
-  me, peers, pings, 
-  onPing, onPingMove, onPingDelete,
-  pingMode, mapMode, showTrails, clearTrailsTrigger 
-}) => {
-  const mapRef = useRef<MapView>(null);
-  const [trails, setTrails] = useState<Record<string, {latitude: number, longitude: number}[]>>({});
-
-  // Map Style (Dark Mode)
-  const darkMapStyle = [
-    { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
-    { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
-    { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
-    {
-      featureType: 'administrative.locality',
-      elementType: 'labels.text.fill',
-      stylers: [{ color: '#d59563' }],
-    },
-    { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-    { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-    { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#6b9a76' }] },
-    { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-    { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
-    { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#9ca5b3' }] },
-    { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#746855' }] },
-    { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#1f2835' }] },
-    { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#f3d19c' }] },
-    { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-    { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#515c6d' }] },
-    { featureType: 'water', elementType: 'labels.text.stroke', stylers: [{ color: '#17263c' }] },
-  ];
-
-  // Clear trails effect
-  useEffect(() => {
-    setTrails({});
-  }, [clearTrailsTrigger]);
-
-  // Update trails
-  useEffect(() => {
-    const updateTrail = (id: string, lat: number, lng: number) => {
-      setTrails(prev => {
-        const currentTrail = prev[id] || [];
-        const lastPoint = currentTrail[currentTrail.length - 1];
-        
-        // Simple distance check to avoid duplicates (approx)
-        if (lastPoint && Math.abs(lastPoint.latitude - lat) < 0.0001 && Math.abs(lastPoint.longitude - lng) < 0.0001) {
-          return prev;
-        }
-
-        const newTrail = [...currentTrail, { latitude: lat, longitude: lng }];
-        // Limit trail length
-        if (newTrail.length > 50) newTrail.shift();
-        
-        return { ...prev, [id]: newTrail };
-      });
-    };
-
-    if (me.lat && me.lng) updateTrail(me.id, me.lat, me.lng);
-    Object.values(peers).forEach(p => {
-      if (p.lat && p.lng) updateTrail(p.id, p.lat, p.lng);
-    });
-  }, [me.lat, me.lng, peers]);
-
-  const handleMapPress = (e: MapPressEvent) => {
-    if (pingMode) {
-      onPing({ lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude });
-    }
-  };
-
-  // Center map on me initially
-  useEffect(() => {
-    if (me.lat && me.lng && mapRef.current) {
-        // Optional: Animate to user on start
-        // mapRef.current.animateToRegion({
-        //     latitude: me.lat, longitude: me.lng,
-        //     latitudeDelta: 0.01, longitudeDelta: 0.01
-        // });
-    }
-  }, []);
+export default function TacticalMap({ isDarkMode, user, pings, onLongPress }: TacticalMapProps) {
+  
+  // URLs extraites de votre fichier comtac.html
+  const TILE_URL_DARK = "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png";
+  const TILE_URL_LIGHT = "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
 
   return (
     <View style={styles.container}>
       <MapView
-        ref={mapRef}
         style={styles.map}
-        customMapStyle={mapMode === 'dark' ? darkMapStyle : []}
-        onPress={handleMapPress}
-        showsUserLocation={false} // We draw our own custom marker
-        provider={PROVIDER_DEFAULT}
+        rotateEnabled={true}
+        zoomEnabled={true}
+        provider={null} // Force l'usage des tuiles personnalisées
+        onLongPress={onLongPress} // Déclencheur du Ping
         initialRegion={{
-          latitude: me.lat || 48.85,
-          longitude: me.lng || 2.35,
+          latitude: 48.8566,
+          longitude: 2.3522,
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
         }}
       >
-        {/* Trails */}
-        {showTrails && Object.entries(trails).map(([id, coords]) => (
-          <Polyline
-            key={`trail-${id}`}
-            coordinates={coords}
-            strokeColor={id === me.id ? '#3b82f6' : '#a855f7'}
-            strokeWidth={2}
-            lineDashPattern={[5, 5]}
-          />
-        ))}
+        {/* Fond de carte dynamique */}
+        <UrlTile
+          urlTemplate={isDarkMode ? TILE_URL_DARK : TILE_URL_LIGHT}
+          maximumZ={19}
+          flipY={false}
+          tileSize={256}
+        />
 
-        {/* ME Marker */}
-        {me.lat && me.lng && (
-          <Marker
-            coordinate={{ latitude: me.lat, longitude: me.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            flat
-            rotation={me.head || 0}
-          >
-            <View style={styles.markerContainer}>
-              <View style={[styles.arrow, { borderBottomColor: STATUS_COLORS[me.status] || '#3b82f6' }]} />
-              <View style={styles.labelContainer}>
-                <Text style={styles.labelText}>{me.callsign}</Text>
-              </View>
-            </View>
-          </Marker>
+        {/* Marqueur Opérateur (Moi) */}
+        {user.lat && user.lng && (
+           <Marker
+             coordinate={{ latitude: user.lat, longitude: user.lng }}
+             title={user.callsign}
+             description={`Status: ${user.status}`}
+             pinColor="green"
+           />
         )}
 
-        {/* PEERS Markers */}
-        {Object.values(peers).map(p => (
-           p.lat && p.lng && (
-            <Marker
-              key={p.id}
-              coordinate={{ latitude: p.lat, longitude: p.lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-              flat
-              rotation={p.head || 0}
-            >
-              <View style={styles.markerContainer}>
-                <View style={[styles.arrow, { borderBottomColor: STATUS_COLORS[p.status] || '#a855f7' }]} />
-                <View style={styles.labelContainer}>
-                  <Text style={styles.labelText}>{p.callsign}</Text>
-                </View>
-              </View>
-            </Marker>
-           )
-        ))}
-
-        {/* PINGS */}
-        {pings.map(p => (
+        {/* Marqueurs PING */}
+        {pings.map((ping) => (
           <Marker
-            key={p.id}
-            coordinate={{ latitude: p.lat, longitude: p.lng }}
-            draggable={p.sender === me.callsign || me.role === OperatorRole.HOST}
-            onDragEnd={(e) => onPingMove({ ...p, lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude })}
-            onCalloutPress={() => onPingDelete(p.id)}
+            key={ping.id}
+            coordinate={{ latitude: ping.lat, longitude: ping.lng }}
+            pinColor="red" // Rouge tactique pour les alertes
           >
-            <View style={styles.pingContainer}>
-              <View style={styles.pingLabel}>
-                <Text style={styles.pingText}>{p.sender}: {p.msg}</Text>
-              </View>
-              <MaterialIcons name="location-on" size={40} color="#ef4444" />
-            </View>
+             {/* Bulle d'info personnalisée pour le Ping */}
+             <View style={styles.pingBadge}>
+                <Text style={styles.pingText}>{ping.message}</Text>
+             </View>
           </Marker>
         ))}
 
       </MapView>
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  map: {
-    width: '100%',
-    height: '100%',
-  },
-  markerContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 60,
-    height: 60,
-  },
-  arrow: {
-    width: 0,
-    height: 0,
-    backgroundColor: 'transparent',
-    borderStyle: 'solid',
-    borderLeftWidth: 8,
-    borderRightWidth: 8,
-    borderBottomWidth: 20,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: '#3b82f6', // dynamic
-  },
-  labelContainer: {
-    marginTop: 4,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    paddingHorizontal: 4,
-    paddingVertical: 2,
+  container: { flex: 1, backgroundColor: '#000' },
+  map: { width: '100%', height: '100%' },
+  pingBadge: {
+    backgroundColor: 'rgba(239, 68, 68, 0.9)', // Rouge semi-transparent
+    padding: 4,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.5)',
-  },
-  labelText: {
-    color: 'white',
-    fontSize: 8,
-    fontWeight: 'bold',
-  },
-  pingContainer: {
-    alignItems: 'center',
-  },
-  pingLabel: {
-    backgroundColor: 'rgba(239, 68, 68, 0.9)',
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginBottom: 0,
-    borderWidth: 1,
-    borderColor: '#fca5a5',
+    borderColor: '#fff',
   },
   pingText: {
-    color: 'white',
-    fontSize: 10,
+    color: '#fff',
     fontWeight: 'bold',
+    fontSize: 10,
   }
 });
-
-export default TacticalMap;
