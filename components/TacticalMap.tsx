@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { StyleSheet, View, Text, Platform } from 'react-native';
-import MapView, { UrlTile, Marker, Polyline, MapPressEvent, LongPressEvent, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { UrlTile, Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserData, PingData, OperatorStatus } from '../types';
 
-// URLs des tuiles
+// URLs
 const TILE_URL_DARK = "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png";
 const TILE_URL_LIGHT = "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
 const TILE_URL_SAT = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
@@ -15,6 +15,12 @@ const COLORS = {
   [OperatorStatus.BUSY]: '#a855f7',
   [OperatorStatus.APPUI]: '#eab308',
   [OperatorStatus.PROGRESSION]: '#3b82f6',
+};
+
+// --- FONCTION DE SÉCURITÉ ---
+// Renvoie TRUE seulement si la coordonnée est un nombre valide et non nul
+const isValidCoord = (val: any): boolean => {
+  return typeof val === 'number' && !isNaN(val) && val !== 0;
 };
 
 interface TacticalMapProps {
@@ -37,69 +43,51 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
   const [trails, setTrails] = useState<Record<string, {latitude: number, longitude: number}[]>>({});
   const [hasCentered, setHasCentered] = useState(false);
 
-  // Sélection de l'URL
   let currentTileUrl = TILE_URL_DARK;
   if (mapMode === 'light') currentTileUrl = TILE_URL_LIGHT;
   if (mapMode === 'satellite') currentTileUrl = TILE_URL_SAT;
 
-  // Centrage auto au premier signal GPS valide
+  // Centrage sécurisé
   useEffect(() => {
-    if (!hasCentered && me && me.lat && me.lng && me.lat !== 0 && mapRef.current) {
+    if (!hasCentered && me && isValidCoord(me.lat) && isValidCoord(me.lng) && mapRef.current) {
         mapRef.current.animateToRegion({
-            latitude: me.lat,
-            longitude: me.lng,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
+            latitude: me.lat, longitude: me.lng, latitudeDelta: 0.01, longitudeDelta: 0.01,
         }, 1000);
         setHasCentered(true);
     }
-  }, [me.lat, me.lng, hasCentered]);
+  }, [me?.lat, me?.lng, hasCentered]);
 
-  // Gestion des tracés (Trails)
+  // Gestion Tracés Sécurisée
   useEffect(() => {
     if (!showTrails) return;
     setTrails(prev => {
       const next = { ...prev };
-      
       const addPoint = (id: string, lat?: number, lng?: number) => {
-        // SÉCURITÉ CRITIQUE : Rejet des valeurs invalides
-        if (lat === undefined || lng === undefined || lat === null || lng === null || lat === 0 || lng === 0) return;
+        if (!isValidCoord(lat) || !isValidCoord(lng)) return;
         
         if (!next[id]) next[id] = [];
         const history = next[id];
         const last = history[history.length - 1];
-
-        // Optimisation : on n'ajoute que si mouvement > 5 mètres approx
-        if (!last || (Math.abs(last.latitude - lat) > 0.00005 || Math.abs(last.longitude - lng) > 0.00005)) {
-          history.push({ latitude: lat, longitude: lng });
+        if (!last || (Math.abs(last.latitude - lat!) > 0.00005 || Math.abs(last.longitude - lng!) > 0.00005)) {
+          history.push({ latitude: lat!, longitude: lng! });
           if (history.length > 50) history.shift();
         }
       };
-
       if (me) addPoint('me', me.lat, me.lng);
-      if (peers) {
-        Object.values(peers).forEach(p => {
-          if (p) addPoint(p.id, p.lat, p.lng);
-        });
-      }
+      if (peers) Object.values(peers).forEach(p => { if (p) addPoint(p.id, p.lat, p.lng); });
       return next;
     });
   }, [me?.lat, me?.lng, peers, showTrails]);
 
-  // Rendu Sécurisé d'un Marqueur
+  // Rendu Marqueur Sécurisé
   const renderMarker = (u: UserData, isMe: boolean) => {
-    if (!u || !u.lat || !u.lng || u.lat === 0 || u.lng === 0) return null;
-    
+    if (!u || !isValidCoord(u.lat) || !isValidCoord(u.lng)) return null;
     const color = COLORS[u.status] || COLORS.CLEAR;
-    
     return (
       <Marker
         key={u.id}
         coordinate={{ latitude: u.lat, longitude: u.lng }}
-        anchor={{ x: 0.5, y: 0.5 }}
-        flat={true}
-        rotation={u.head || 0}
-        zIndex={isMe ? 100 : 50}
+        anchor={{ x: 0.5, y: 0.5 }} flat={true} rotation={u.head || 0} zIndex={isMe ? 100 : 50}
       >
         <View style={styles.markerContainer}>
           <View style={[styles.labelBadge, { borderColor: color }]}>
@@ -116,78 +104,49 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
       <MapView
         ref={mapRef}
         style={styles.map}
-        provider={PROVIDER_DEFAULT} // Utilise le moteur Google installé mais sans clé valide
-        mapType={Platform.OS === 'android' ? "none" : "standard"} // Cache le fond Google par défaut
-        rotateEnabled={true}
-        showsUserLocation={false}
-        // Callbacks
+        provider={PROVIDER_DEFAULT}
+        mapType={Platform.OS === 'android' ? "none" : "standard"}
+        rotateEnabled={true} showsUserLocation={false}
+        // Callbacks sécurisés
         onPress={(e) => { if(pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
         onLongPress={(e) => { if(!pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
-        initialRegion={{
-            latitude: 48.8566, longitude: 2.3522,
-            latitudeDelta: 0.05, longitudeDelta: 0.05,
-        }}
+        initialRegion={{ latitude: 48.8566, longitude: 2.3522, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
       >
-        {/* TUILES OSM/SAT : zIndex 10 pour passer au dessus du fond gris */}
         <UrlTile
-          key={mapMode} // Force le refresh
-          urlTemplate={currentTileUrl}
-          maximumZ={19}
-          flipY={false}
-          zIndex={10} 
+          key={mapMode} urlTemplate={currentTileUrl}
+          maximumZ={19} flipY={false} zIndex={10} 
         />
 
-        {/* TRACÉS */}
         {showTrails && Object.entries(trails).map(([id, coords]) => {
            const isMe = id === 'me';
            const userObj = isMe ? me : Object.values(peers).find(p => p.id === id);
            const color = userObj ? (COLORS[userObj.status] || COLORS.CLEAR) : '#888';
-           
-           if (coords.length < 2) return null;
-
-           return (
-             <Polyline
-               key={`trail-${id}`}
-               coordinates={coords}
-               strokeColor={color}
-               strokeWidth={isMe ? 3 : 2}
-               lineDashPattern={isMe ? [0] : [5, 5]}
-               zIndex={15}
-             />
-           );
+           if(coords.length < 2) return null;
+           return (<Polyline key={`trail-${id}`} coordinates={coords} strokeColor={color} strokeWidth={isMe ? 3 : 2} lineDashPattern={isMe ? [0] : [5, 5]} zIndex={15} />);
         })}
 
-        {/* MARQUEURS */}
         {renderMarker(me, true)}
         {peers && Object.values(peers).map(p => renderMarker(p, false))}
 
-        {/* PINGS */}
         {pings && pings.map(ping => {
-            if(!ping.lat || !ping.lng) return null;
+            // VERIFICATION CRITIQUE PING
+            if(!isValidCoord(ping.lat) || !isValidCoord(ping.lng)) return null;
             return (
               <Marker
                 key={ping.id}
                 coordinate={{ latitude: ping.lat, longitude: ping.lng }}
                 draggable={ping.sender === me?.callsign}
                 onDragEnd={(e) => onPingMove({ ...ping, lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude })}
-                onCalloutPress={() => {
-                    if (ping.sender === me?.callsign || me?.role === 'HOST') {
-                        onPingDelete(ping.id);
-                    }
-                }}
+                onCalloutPress={() => { if (ping.sender === me?.callsign || me?.role === 'HOST') onPingDelete(ping.id); }}
                 zIndex={200}
               >
                 <View style={styles.pingMarker}>
                   <MaterialIcons name="location-on" size={40} color="#ef4444" />
-                  <View style={styles.pingLabel}>
-                     <Text style={styles.pingText}>{ping.msg}</Text>
-                     <Text style={styles.pingSender}>{ping.sender}</Text>
-                  </View>
+                  <View style={styles.pingLabel}><Text style={styles.pingText}>{ping.msg}</Text><Text style={styles.pingSender}>{ping.sender}</Text></View>
                 </View>
               </Marker>
             );
         })}
-
       </MapView>
     </View>
   );
@@ -197,18 +156,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   map: { width: '100%', height: '100%' },
   markerContainer: { alignItems: 'center', justifyContent: 'center', width: 60, height: 60 },
-  labelBadge: {
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    paddingHorizontal: 4, paddingVertical: 2,
-    borderRadius: 4, borderWidth: 1, marginBottom: 2,
-  },
+  labelBadge: { backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4, borderWidth: 1, marginBottom: 2 },
   labelText: { fontSize: 10, fontWeight: 'bold' },
   pingMarker: { alignItems: 'center' },
-  pingLabel: {
-    position: 'absolute', top: 35,
-    backgroundColor: '#ef4444', padding: 4, borderRadius: 4,
-    alignItems: 'center', minWidth: 60,
-  },
+  pingLabel: { position: 'absolute', top: 35, backgroundColor: '#ef4444', padding: 4, borderRadius: 4, alignItems: 'center', minWidth: 60 },
   pingText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
   pingSender: { color: 'white', fontSize: 8 }
 });
