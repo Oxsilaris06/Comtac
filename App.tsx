@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
-  Dimensions, SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert
+  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar 
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
@@ -12,10 +12,8 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
-// Assurez-vous que vos types sont à jour dans types.ts
-import { 
-  UserData, OperatorStatus, OperatorRole, ViewType, PingData 
-} from './types';
+// Vos imports
+import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
@@ -24,13 +22,15 @@ import TacticalMap from './components/TacticalMap';
 const App: React.FC = () => {
   useKeepAwake();
 
-  // --- ÉTATS EXISTANTS ---
-  const [view, setView] = useState<ViewType>('login');
+  // --- 1. ETAT INITIAL SÉCURISÉ (Lat/Lng par défaut pour éviter le crash au boot) ---
   const [user, setUser] = useState<UserData>({
     id: '', callsign: '', role: OperatorRole.OPR,
     status: OperatorStatus.CLEAR, isTx: false,
-    joinedAt: Date.now(), bat: 100, head: 0
+    joinedAt: Date.now(), bat: 100, head: 0,
+    lat: 48.8566, lng: 2.3522 
   });
+
+  const [view, setView] = useState<ViewType>('login');
   const [peers, setPeers] = useState<Record<string, UserData>>({});
   const [pings, setPings] = useState<PingData[]>([]);
   const [hostId, setHostId] = useState<string>('');
@@ -39,8 +39,7 @@ const App: React.FC = () => {
   const [hostInput, setHostInput] = useState('');
   const [pingMsgInput, setPingMsgInput] = useState('');
 
-  // --- NOUVEAUX ÉTATS (Fonctionnalités V14) ---
-  const [silenceMode, setSilenceMode] = useState(false); // Mode Silence Radio
+  const [silenceMode, setSilenceMode] = useState(false);
   const [isPingMode, setIsPingMode] = useState(false);
   const [mapMode, setMapMode] = useState<'dark' | 'light'>('dark');
   const [showTrails, setShowTrails] = useState(true);
@@ -56,7 +55,6 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- LOGIQUE TOAST ---
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
     setToast({ msg, type });
     if (type === 'error') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -64,7 +62,6 @@ const App: React.FC = () => {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  // --- RÉSEAU (Broadcast & Handler) ---
   const broadcast = useCallback((data: any) => {
     Object.values(connectionsRef.current).forEach((conn: any) => {
       if (conn.open) conn.send(data);
@@ -90,14 +87,13 @@ const App: React.FC = () => {
       case 'DELETE_PING':
         setPings(prev => prev.filter(p => p.id !== data.pingId));
         break;
-      case 'SILENCE': // Nouveau : Synchro du Silence Radio
+      case 'SILENCE':
         setSilenceMode(data.state);
         showToast(data.state ? "SILENCE RADIO ACTIF" : "FIN DU SILENCE");
         break;
     }
   }, [showToast]);
 
-  // --- PEERJS INIT ---
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
 
@@ -119,7 +115,6 @@ const App: React.FC = () => {
       conn.on('data', (data: any) => handleData(data, conn.peer));
       conn.on('open', () => {
         if (initialRole === OperatorRole.HOST) {
-          // Sync initiale + État Silence
           conn.send({ type: 'SYNC_PEERS', peers });
           if(silenceMode) conn.send({ type: 'SILENCE', state: true });
         }
@@ -139,7 +134,6 @@ const App: React.FC = () => {
 
   const connectToHost = useCallback((targetId: string) => {
     if (!peerRef.current || !audioService.stream) return;
-    
     const conn = peerRef.current.connect(targetId);
     connectionsRef.current[targetId] = conn;
     
@@ -151,7 +145,6 @@ const App: React.FC = () => {
         audioService.playStream(remoteStream);
       });
     });
-    
     conn.on('data', (data: any) => handleData(data, targetId));
   }, [user, handleData, showToast]);
 
@@ -164,14 +157,12 @@ const App: React.FC = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
-  // --- SERVICES (Audio, GPS) ---
   const startServices = async () => {
     const audioOk = await audioService.init();
     if (!audioOk) showToast("ERREUR MICRO", "error");
     
-    // Logique VAD (Voice Activity Detection)
     audioService.startMetering((level) => {
-      if (audioService.mode === 'vox' && !silenceMode) { // VAD coupé en silence
+      if (audioService.mode === 'vox' && !silenceMode) {
         const shouldTx = level > CONFIG.VAD_THRESHOLD;
         if (shouldTx !== audioService.isTx) {
           audioService.setTx(shouldTx);
@@ -207,7 +198,6 @@ const App: React.FC = () => {
     );
   };
 
-  // --- ACTIONS UTILISATEUR ---
   const handleLogin = async () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return showToast("Trigramme trop court", "error");
@@ -239,10 +229,7 @@ const App: React.FC = () => {
     setTimeout(() => joinSession(data), 500);
   };
 
-  // --- NOUVEAU : LOGIQUE PING & SILENCE ---
-
   const handleLongPressMap = (e: any) => {
-    // Appelé par TacticalMap lors d'un appui long
     const coord = e.nativeEvent.coordinate;
     setTempPingLoc({ lat: coord.latitude, lng: coord.longitude });
     setShowPingModal(true);
@@ -254,7 +241,7 @@ const App: React.FC = () => {
     if (tempPingLoc) {
         const ping: PingData = {
           id: Date.now().toString(), lat: tempPingLoc.lat, lng: tempPingLoc.lng,
-          msg, sender: user.callsign, timestamp: Date.now() // Ajout timestamp
+          msg, sender: user.callsign, timestamp: Date.now()
         };
         setPings(prev => [...prev, ping]);
         broadcast({ type: 'PING', ping });
@@ -266,15 +253,11 @@ const App: React.FC = () => {
   };
 
   const toggleSilence = () => {
-    // Seul le Host peut activer le silence
     if (user.role !== OperatorRole.HOST) return showToast("Hôte requis", "error");
-    
     const newState = !silenceMode;
     setSilenceMode(newState);
     broadcast({ type: 'SILENCE', state: newState });
     showToast(newState ? "SILENCE RADIO ACTIVÉ" : "SILENCE DÉSACTIVÉ");
-    
-    // Si on active le silence, on coupe l'audio local
     if (newState) {
         setVoxActive(false);
         audioService.setTx(false);
@@ -288,7 +271,6 @@ const App: React.FC = () => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         return;
     }
-
     if (!voxActive) { 
         audioService.setTx(true); 
         setUser(prev => { 
@@ -310,8 +292,6 @@ const App: React.FC = () => {
         }); 
     }
   };
-
-  // --- RENDERERS ---
 
   const renderLogin = () => (
     <View style={styles.centerContainer}>
@@ -359,7 +339,6 @@ const App: React.FC = () => {
 
   const renderDashboard = () => (
     <View style={{flex: 1}}>
-      {/* HEADER AVEC BANDEAU SILENCE */}
       <View style={{backgroundColor: '#09090b'}}>
           <SafeAreaView style={styles.header}>
             <View style={styles.headerContent}>
@@ -391,15 +370,23 @@ const App: React.FC = () => {
           </View>
         ) : (
           <View style={{flex: 1}}>
-            {/* CARTE AVEC PROPS MIS À JOUR */}
+            {/* 2. APPEL CORRECT DE TACTICALMAP AVEC "me={user}" (Vital) */}
             <TacticalMap 
-              isDarkMode={mapMode === 'dark'}
-              user={user}
+              me={user}
+              peers={peers}
               pings={pings}
-              onLongPress={handleLongPressMap}
-              // Compatibilité rétroactive si votre TacticalMap supporte encore ces props:
-              peers={peers} 
+              mapMode={mapMode}
               showTrails={showTrails}
+              pingMode={isPingMode}
+              onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
+              onPingMove={(p) => { 
+                setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
+                broadcast({ type: 'UPDATE_PING', ping: p });
+              }}
+              onPingDelete={(id) => {
+                setPings(prev => prev.filter(p => p.id !== id));
+                broadcast({ type: 'DELETE_PING', pingId: id });
+              }}
             />
             
             <View style={styles.mapControls}>
@@ -409,13 +396,18 @@ const App: React.FC = () => {
                 <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
                     <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
                 </TouchableOpacity>
+                <TouchableOpacity 
+                    onPress={() => setIsPingMode(!isPingMode)} 
+                    style={[styles.mapBtn, isPingMode ? {backgroundColor: '#dc2626', borderColor: '#f87171'} : null]}
+                >
+                    <MaterialIcons name="ads-click" size={24} color="white" />
+                </TouchableOpacity>
             </View>
           </View>
         )}
       </View>
 
       <View style={styles.footer}>
-        {/* BARRE DE STATUT + BOUTON SILENCE (HÔTE SEULEMENT) */}
         <View style={styles.statusRow}>
             {user.role === OperatorRole.HOST ? (
                <TouchableOpacity 
