@@ -4,10 +4,8 @@ workflows:
     max_build_duration: 120
     instance_type: mac_mini_m2
     environment:
-      # Pas de clés de signature (Keystore) nécessaires pour le mode Debug
       vars:
         PACKAGE_NAME: "com.tactical.comtac"
-      # On laisse Codemagic gérer la version de Node par défaut (M2 compatible)
     
     scripts:
       - name: Install npm dependencies
@@ -16,19 +14,16 @@ workflows:
 
       - name: Run Expo Prebuild
         script: | 
-          # C'est l'étape magique qui transforme votre JS en projet Android natif
-          npx expo prebuild --platform android --no-interactive
+          # Correction : Suppression du flag incompatible
+          npx expo prebuild --platform android
 
       - name: Build Android APK
         script: | 
           cd android
-          # Rend le script de compilation exécutable
           chmod +x gradlew
-          # Compile un APK (pas un Bundle) en mode Debug
           ./gradlew assembleDebug
 
     artifacts:
-      # Récupère tous les fichiers .apk générés
       - android/app/build/outputs/apk/debug/*.apk
 
     publishing:
