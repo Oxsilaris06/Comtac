@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { StyleSheet, View, Text, Platform } from 'react-native';
-import MapView, { UrlTile, Marker, Polyline, MapPressEvent, LongPressEvent } from 'react-native-maps';
+import MapView, { UrlTile, Marker, Polyline, MapPressEvent, LongPressEvent, PROVIDER_DEFAULT } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserData, PingData, OperatorStatus } from '../types';
 
@@ -40,7 +40,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
     setTrails(prev => {
       const next = { ...prev };
       
-      // SÉCURITÉ ANTI-CRASH : On ignore si lat/lng sont invalides
       const addPoint = (id: string, lat?: number, lng?: number) => {
         if (lat === undefined || lng === undefined || lat === null || lng === null) return;
         
@@ -54,67 +53,38 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         }
       };
 
-      // Ajout sécurisé
       if (me) addPoint('me', me.lat, me.lng);
       if (peers) {
         Object.values(peers).forEach(p => {
           if (p) addPoint(p.id, p.lat, p.lng);
         });
       }
-
       return next;
     });
   }, [me?.lat, me?.lng, peers, showTrails]);
-
-  const handleMapPress = (e: MapPressEvent) => {
-    if (pingMode) onPing(e.nativeEvent.coordinate);
-  };
-
-  const handleLongPress = (e: LongPressEvent) => {
-    if (!pingMode) onPing(e.nativeEvent.coordinate);
-  };
-
-  const renderOperatorMarker = (u: UserData, isMe: boolean) => {
-    // SÉCURITÉ RENDU : Si pas de coordonnées, on n'affiche rien (évite le crash)
-    if (!u || u.lat === undefined || u.lng === undefined || u.lat === null || u.lng === null) return null;
-    
-    const color = COLORS[u.status] || COLORS.CLEAR;
-    
-    return (
-      <Marker
-        key={u.id}
-        coordinate={{ latitude: u.lat, longitude: u.lng }}
-        anchor={{ x: 0.5, y: 0.5 }}
-        flat={true}
-        rotation={u.head || 0}
-        zIndex={isMe ? 100 : 50}
-      >
-        <View style={styles.markerContainer}>
-          <View style={[styles.labelBadge, { borderColor: color }]}>
-            <Text style={[styles.labelText, { color: color }]}>{u.callsign}</Text>
-          </View>
-          <MaterialIcons name="navigation" size={32} color={color} />
-        </View>
-      </Marker>
-    );
-  };
 
   return (
     <View style={styles.container}>
       <MapView
         ref={mapRef}
         style={styles.map}
-        provider={null}
+        // RETRAIT de provider={null} qui cause le crash sur certaines versions Android
+        // On laisse le provider par défaut (Google sur Android, Apple sur iOS)
+        provider={PROVIDER_DEFAULT} 
+        
+        // "none" cache le fond Google Maps par défaut pour qu'on puisse mettre nos tuiles
         mapType={Platform.OS === 'android' ? "none" : "standard"}
+        
         rotateEnabled={true}
         showsUserLocation={false}
-        onPress={handleMapPress}
-        onLongPress={handleLongPress}
+        onPress={(e) => pingMode && onPing(e.nativeEvent.coordinate)}
+        onLongPress={(e) => !pingMode && onPing(e.nativeEvent.coordinate)}
         initialRegion={{
             latitude: 48.8566, longitude: 2.3522,
             latitudeDelta: 0.05, longitudeDelta: 0.05,
         }}
       >
+        {/* Tuiles OSM par dessus le fond gris/vide */}
         <UrlTile
           urlTemplate={mapMode === 'dark' ? TILE_URL_DARK : TILE_URL_LIGHT}
           maximumZ={19}
@@ -122,11 +92,11 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
           zIndex={-1}
         />
 
+        {/* TRACÉS */}
         {showTrails && Object.entries(trails).map(([id, coords]) => {
            const isMe = id === 'me';
            const userObj = isMe ? me : Object.values(peers).find(p => p.id === id);
            const color = userObj ? (COLORS[userObj.status] || COLORS.CLEAR) : '#888';
-           
            return (
              <Polyline
                key={`trail-${id}`}
@@ -139,18 +109,45 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
            );
         })}
 
-        {renderOperatorMarker(me, true)}
-        {peers && Object.values(peers).map(p => renderOperatorMarker(p, false))}
+        {/* MARQUEURS */}
+        {me && me.lat && (
+            <Marker
+                key={me.id} coordinate={{ latitude: me.lat, longitude: me.lng }}
+                anchor={{ x: 0.5, y: 0.5 }} flat={true} rotation={me.head || 0} zIndex={100}
+            >
+                <View style={styles.markerContainer}>
+                <View style={[styles.labelBadge, { borderColor: COLORS[me.status] }]}>
+                    <Text style={[styles.labelText, { color: COLORS[me.status] }]}>{me.callsign}</Text>
+                </View>
+                <MaterialIcons name="navigation" size={32} color={COLORS[me.status]} />
+                </View>
+            </Marker>
+        )}
+        
+        {peers && Object.values(peers).map(p => (
+            p && p.lat && (
+                <Marker
+                    key={p.id} coordinate={{ latitude: p.lat, longitude: p.lng }}
+                    anchor={{ x: 0.5, y: 0.5 }} flat={true} rotation={p.head || 0} zIndex={50}
+                >
+                    <View style={styles.markerContainer}>
+                    <View style={[styles.labelBadge, { borderColor: COLORS[p.status] || '#fff' }]}>
+                        <Text style={[styles.labelText, { color: COLORS[p.status] || '#fff' }]}>{p.callsign}</Text>
+                    </View>
+                    <MaterialIcons name="navigation" size={32} color={COLORS[p.status] || '#fff'} />
+                    </View>
+                </Marker>
+            )
+        ))}
 
+        {/* PINGS */}
         {pings && pings.map(ping => (
           <Marker
             key={ping.id}
             coordinate={{ latitude: ping.lat, longitude: ping.lng }}
-            draggable={ping.sender === me.callsign}
+            draggable={ping.sender === me?.callsign}
             onDragEnd={(e) => onPingMove({ ...ping, lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude })}
-            onCalloutPress={() => {
-                if (ping.sender === me.callsign || me.role === 'HOST') onPingDelete(ping.id);
-            }}
+            onCalloutPress={() => { if (ping.sender === me?.callsign || me?.role === 'HOST') onPingDelete(ping.id); }}
             zIndex={200}
           >
             <View style={styles.pingMarker}>
