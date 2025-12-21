@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserData, OperatorStatus } from '../types';
 
@@ -18,11 +18,11 @@ const STATUS_COLORS = {
 };
 
 const OperatorCard: React.FC<Props> = ({ user, isMe }) => {
-  // Sécurité absolue anti-crash
   if (!user) return null;
 
   const statusColor = STATUS_COLORS[user.status] || '#22c55e';
-  const batteryLevel = user.bat ?? 0; // Si null, affiche 0
+  // Affichage batterie : 0 si null
+  const batteryLevel = user.bat !== null ? user.bat : 0; 
   const role = user.role || 'OPR';
   const callsign = user.callsign || 'UNK';
 
@@ -45,7 +45,6 @@ const OperatorCard: React.FC<Props> = ({ user, isMe }) => {
         <Text style={styles.battery}>🔋 {batteryLevel}%</Text>
       </View>
 
-      {/* Barre visuelle d'activité */}
       <View style={styles.vizBar}>
         <View style={[styles.vizFill, { width: user.isTx ? '100%' : '0%' }]} />
       </View>
@@ -70,11 +69,7 @@ const styles = StyleSheet.create({
   talkingCard: { 
     borderColor: '#22c55e', 
     borderWidth: 1.5,
-    shadowColor: "#22c55e",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 5,
-    elevation: 3
+    shadowColor: "#22c55e", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 5, elevation: 3
   },
   header: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   roleTag: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
