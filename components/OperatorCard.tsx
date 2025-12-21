@@ -3,23 +3,15 @@ import { View, Text, StyleSheet } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserData, OperatorStatus } from '../types';
 
-interface Props {
-  user: UserData;
-  me?: UserData;
-  isMe?: boolean;
-}
+interface Props { user: UserData; me?: UserData; isMe?: boolean; }
 
 const STATUS_COLORS = {
-  [OperatorStatus.CLEAR]: '#22c55e',
-  [OperatorStatus.CONTACT]: '#ef4444',
-  [OperatorStatus.BUSY]: '#a855f7',
-  [OperatorStatus.APPUI]: '#eab308',
-  [OperatorStatus.PROGRESSION]: '#3b82f6',
+  [OperatorStatus.CLEAR]: '#22c55e', [OperatorStatus.CONTACT]: '#ef4444',
+  [OperatorStatus.BUSY]: '#a855f7', [OperatorStatus.APPUI]: '#eab308', [OperatorStatus.PROGRESSION]: '#3b82f6',
 };
 
 const OperatorCard: React.FC<Props> = ({ user, isMe }) => {
   if (!user) return null;
-
   const statusColor = STATUS_COLORS[user.status] || '#22c55e';
   const batteryLevel = user.bat ?? 0;
   const role = user.role || 'OPR';
@@ -28,22 +20,13 @@ const OperatorCard: React.FC<Props> = ({ user, isMe }) => {
   return (
     <View style={[styles.card, isMe && styles.myCard, user.isTx && styles.talkingCard]}>
       <View style={styles.header}>
-        <View style={styles.roleTag}>
-          <Text style={styles.roleText}>{role}</Text>
-        </View>
+        <View style={styles.roleTag}><Text style={styles.roleText}>{role}</Text></View>
         {user.isTx && <MaterialIcons name="graphic-eq" size={16} color="#22c55e" />}
       </View>
-
       <Text style={styles.callsign}>{callsign}</Text>
       <Text style={[styles.status, { color: statusColor }]}>{user.status || 'CLEAR'}</Text>
-
-      <View style={styles.footer}>
-        <Text style={styles.battery}>🔋 {batteryLevel}%</Text>
-      </View>
-
-      <View style={styles.vizBar}>
-        <View style={[styles.vizFill, { width: user.isTx ? '100%' : '0%' }]} />
-      </View>
+      <View style={styles.footer}><Text style={styles.battery}>🔋 {batteryLevel}%</Text></View>
+      <View style={styles.vizBar}><View style={[styles.vizFill, { width: user.isTx ? '100%' : '0%' }]} /></View>
     </View>
   );
 };
@@ -62,5 +45,4 @@ const styles = StyleSheet.create({
   vizBar: { height: 3, backgroundColor: '#27272a', marginTop: 8, borderRadius: 2, overflow: 'hidden' },
   vizFill: { height: '100%', backgroundColor: '#22c55e' }
 });
-
 export default OperatorCard;
