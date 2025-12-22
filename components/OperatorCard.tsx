@@ -1,9 +1,14 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserData, OperatorStatus } from '../types';
 
-interface Props { user: UserData; me?: UserData; isMe?: boolean; }
+interface Props { 
+    user: UserData; 
+    me?: UserData; 
+    isMe?: boolean;
+    style?: StyleProp<ViewStyle>; // Ajout prop style
+}
 
 const STATUS_COLORS = {
   [OperatorStatus.CLEAR]: '#22c55e', [OperatorStatus.CONTACT]: '#ef4444',
@@ -11,7 +16,7 @@ const STATUS_COLORS = {
   [OperatorStatus.PROGRESSION]: '#3b82f6',
 };
 
-const OperatorCard: React.FC<Props> = ({ user, isMe }) => {
+const OperatorCard: React.FC<Props> = ({ user, isMe, style }) => {
   if (!user) return null;
   const statusColor = STATUS_COLORS[user.status] || '#22c55e';
   const batteryLevel = user.bat !== null ? user.bat : 0; 
@@ -19,7 +24,8 @@ const OperatorCard: React.FC<Props> = ({ user, isMe }) => {
   const callsign = user.callsign || 'UNK';
 
   return (
-    <View style={[styles.card, isMe && styles.myCard, user.isTx && styles.talkingCard]}>
+    // Application du style dynamique ici
+    <View style={[styles.card, isMe && styles.myCard, user.isTx && styles.talkingCard, style]}>
       <View style={styles.header}>
         <View style={styles.roleTag}><Text style={styles.roleText}>{role}</Text></View>
         {user.isTx && <MaterialIcons name="graphic-eq" size={16} color="#22c55e" />}
