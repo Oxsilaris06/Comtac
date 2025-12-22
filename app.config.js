@@ -1,8 +1,7 @@
 const { withAndroidManifest } = require('@expo/config-plugins');
 
 module.exports = function(config) {
-  // Configuration de base (anciennement app.json)
-  const baseConfig = {
+  return withMusicControlFix({
     name: "COM TAC v14",
     slug: "comtac-v14",
     version: "1.0.0",
@@ -38,7 +37,7 @@ module.exports = function(config) {
         "android.permission.WAKE_LOCK",
         "android.permission.BATTERY_STATS",
         "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_CONNECT", // Ajout Android 12+
+        "android.permission.BLUETOOTH_CONNECT",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
@@ -48,26 +47,24 @@ module.exports = function(config) {
       ["expo-build-properties", { android: { minSdkVersion: 24, compileSdkVersion: 34, targetSdkVersion: 34, buildToolsVersion: "34.0.0" } }],
       "@config-plugins/react-native-webrtc"
     ]
-  };
-
-  // --- PLUGIN MAGIQUE : Fix White Screen (Music Control) ---
-  // Injecte le service manquant dans AndroidManifest.xml
-  const withMusicControlFix = (conf) => {
-    return withAndroidManifest(conf, async (config) => {
-      const androidManifest = config.modResults;
-      const mainApplication = androidManifest.manifest.application[0];
-
-      // Ajout du service requis par react-native-music-control
-      mainApplication['service'] = mainApplication['service'] || [];
-      mainApplication['service'].push({
-        $: {
-          'android:name': 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotification',
-        }
-      });
-      return config;
-    });
-  };
-
-  // Applique le fix et retourne la config
-  return withMusicControlFix({ ...config, ...baseConfig });
+  });
 };
+
+// --- PLUGIN CUSTOM : Réparation MusicControl (Anti-White Screen) ---
+function withMusicControlFix(config) {
+  return withAndroidManifest(config, async (config) => {
+    const androidManifest = config.modResults;
+    const mainApplication = androidManifest.manifest.application[0];
+
+    // On ajoute le service manquant qui cause le crash
+    mainApplication['service'] = mainApplication['service'] || [];
+    const serviceName = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotification';
+    
+    if (!mainApplication['service'].some(s => s.$['android:name'] === serviceName)) {
+      mainApplication['service'].push({
+        $: { 'android:name': serviceName }
+      });
+    }
+    return config;
+  });
+}
