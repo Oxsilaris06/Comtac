@@ -15,6 +15,7 @@
     "expo-status-bar": "~1.12.1",
     "expo-camera": "~15.0.16",
     "expo-location": "~17.0.1",
+    "expo-sensors": "~13.0.9",
     "expo-keep-awake": "~13.0.2",
     "expo-haptics": "~13.0.1",
     "expo-battery": "~8.0.1",
