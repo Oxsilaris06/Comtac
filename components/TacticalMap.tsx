@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, View, Platform } from 'react-native';
+// CORRECTION ICI : Ajout de "Text" dans les imports
+import { StyleSheet, View, Text, Platform } from 'react-native';
 import MapView, { UrlTile, Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserData, PingData, OperatorStatus } from '../types';
