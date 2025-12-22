@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { View, StyleSheet, ActivityIndicator } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { UserData, PingData, OperatorStatus } from '../types';
+import { UserData, PingData } from '../types';
 
 interface TacticalMapProps {
   me: UserData;
@@ -9,19 +9,20 @@ interface TacticalMapProps {
   pings: PingData[];
   mapMode: 'dark' | 'light' | 'satellite';
   showTrails: boolean;
+  showPings: boolean;
   pingMode: boolean;
+  isHost: boolean;
   onPing: (loc: { lat: number; lng: number }) => void;
   onPingMove: (ping: PingData) => void;
   onPingDelete: (id: string) => void;
 }
 
 const TacticalMap: React.FC<TacticalMapProps> = ({
-  me, peers, pings, mapMode, showTrails, pingMode,
+  me, peers, pings, mapMode, showTrails, showPings, pingMode, isHost,
   onPing, onPingMove, onPingDelete
 }) => {
   const webViewRef = useRef<WebView>(null);
 
-  // --- LE COEUR DU SYSTÈME : Une page Web Leaflet complète ---
   const leafletHTML = `
     <!DOCTYPE html>
     <html>
@@ -33,30 +34,13 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         #map { width: 100vw; height: 100vh; }
         .leaflet-control-attribution { display: none; }
         
-        /* Styles des Marqueurs (Copie conforme du Web) */
-        .tac-wrapper { transition: transform 0.3s linear; will-change: transform; }
-        .tac-arrow {
-            width: 0; height: 0;
-            border-left: 10px solid transparent; border-right: 10px solid transparent;
-            border-bottom: 24px solid #3b82f6; 
-            filter: drop-shadow(0 0 4px #3b82f6);
-        }
-        .tac-label {
-            position: absolute; top: 28px; left: 50%; transform: translateX(-50%);
-            background: rgba(0,0,0,0.85); color: white; padding: 2px 6px;
-            border-radius: 4px; font-family: monospace; font-size: 10px; font-weight: bold;
-            white-space: nowrap; border: 1px solid #3b82f6;
-        }
-        /* Status Colors */
-        .status-CONTACT .tac-arrow { border-bottom-color: #ef4444; filter: drop-shadow(0 0 8px red); }
-        .status-CONTACT .tac-label { border-color: #ef4444; color: #ef4444; }
-        .status-CLEAR .tac-arrow { border-bottom-color: #22c55e; }
-        .status-CLEAR .tac-label { border-color: #22c55e; color: #22c55e; }
-        .status-APPUI .tac-arrow { border-bottom-color: #eab308; }
-        .status-APPUI .tac-label { border-color: #eab308; color: #eab308; }
-        .status-BUSY .tac-arrow { border-bottom-color: #a855f7; }
-        .status-BUSY .tac-label { border-color: #a855f7; color: #a855f7; }
-
+        .tac-wrapper { transition: transform 0.3s linear; }
+        .tac-arrow { width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-bottom: 24px solid #3b82f6; filter: drop-shadow(0 0 4px #3b82f6); }
+        .tac-label { position: absolute; top: 28px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: white; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 10px; font-weight: bold; white-space: nowrap; border: 1px solid #3b82f6; }
+        .status-CONTACT .tac-arrow { border-bottom-color: #ef4444; filter: drop-shadow(0 0 8px red); } .status-CONTACT .tac-label { border-color: #ef4444; color: #ef4444; }
+        .status-CLEAR .tac-arrow { border-bottom-color: #22c55e; } .status-CLEAR .tac-label { border-color: #22c55e; color: #22c55e; }
+        .status-APPUI .tac-arrow { border-bottom-color: #eab308; } .status-APPUI .tac-label { border-color: #eab308; color: #eab308; }
+        .status-BUSY .tac-arrow { border-bottom-color: #a855f7; } .status-BUSY .tac-label { border-color: #a855f7; color: #a855f7; }
         .ping-marker { text-align: center; color: #ef4444; font-weight: bold; text-shadow: 0 0 5px black; }
         .ping-msg { background: #ef4444; color: white; padding: 2px 4px; border-radius: 4px; font-size: 10px; }
       </style>
@@ -65,77 +49,53 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
     <body>
       <div id="map"></div>
       <script>
-        // INIT MAP
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([48.85, 2.35], 13);
-        
-        // LAYERS
         const layers = {
             dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {subdomains:'abcd', maxZoom:19}),
             light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {subdomains:'abcd', maxZoom:19}),
             satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:19})
         };
-        let currentLayer = layers.dark;
-        currentLayer.addTo(map);
+        let currentLayer = layers.dark; currentLayer.addTo(map);
 
-        // DATA STORE
         const markers = {};
         const trails = {};
+        const pingLayer = L.layerGroup().addTo(map);
         const pings = {};
-        let myId = null;
 
-        // COMMUNICATION APP -> WEBVIEW
-        document.addEventListener('message', (event) => {
-            handleData(JSON.parse(event.data));
-        });
-        window.addEventListener('message', (event) => { // Support iOS
-            handleData(JSON.parse(event.data));
-        });
+        function sendToApp(data) { window.ReactNativeWebView.postMessage(JSON.stringify(data)); }
+        
+        document.addEventListener('message', (event) => handleData(JSON.parse(event.data)));
+        window.addEventListener('message', (event) => handleData(JSON.parse(event.data)));
 
         function handleData(data) {
             if (data.type === 'UPDATE_MAP') {
                 updateMapMode(data.mode);
                 updateMarkers(data.me, data.peers, data.showTrails);
-                updatePings(data.pings);
+                updatePings(data.pings, data.showPings, data.isHost, data.me.callsign);
             }
         }
 
         function updateMapMode(mode) {
             const newLayer = layers[mode] || layers.dark;
-            if (currentLayer !== newLayer) {
-                map.removeLayer(currentLayer);
-                newLayer.addTo(map);
-                currentLayer = newLayer;
-            }
+            if (currentLayer !== newLayer) { map.removeLayer(currentLayer); newLayer.addTo(map); currentLayer = newLayer; }
         }
 
         function updateMarkers(me, peers, showTrails) {
             const all = [me, ...Object.values(peers)].filter(u => u && u.lat);
-            
-            // Cleanup old markers
             const activeIds = all.map(u => u.id);
-            Object.keys(markers).forEach(id => {
-                if(!activeIds.includes(id)) { map.removeLayer(markers[id]); delete markers[id]; }
-            });
+            Object.keys(markers).forEach(id => { if(!activeIds.includes(id)) { map.removeLayer(markers[id]); delete markers[id]; } });
 
             all.forEach(u => {
                 const iconHtml = \`<div class="tac-wrapper status-\${u.status}" style="transform: rotate(\${u.head||0}deg);"><div class="tac-arrow"></div></div><div class="tac-label status-\${u.status}">\${u.callsign}</div>\`;
                 const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [40, 40], iconAnchor: [20, 20] });
-
-                if (markers[u.id]) {
-                    markers[u.id].setLatLng([u.lat, u.lng]);
-                    markers[u.id].setIcon(icon);
-                } else {
-                    markers[u.id] = L.marker([u.lat, u.lng], {icon: icon, zIndexOffset: u.id === me.id ? 1000 : 500}).addTo(map);
-                }
-
-                // Trails
+                if (markers[u.id]) { markers[u.id].setLatLng([u.lat, u.lng]); markers[u.id].setIcon(icon); } 
+                else { markers[u.id] = L.marker([u.lat, u.lng], {icon: icon, zIndexOffset: u.id === me.id ? 1000 : 500}).addTo(map); }
+                
                 if (!trails[u.id]) trails[u.id] = { pts: [], line: null };
                 const t = trails[u.id];
                 const last = t.pts[t.pts.length - 1];
                 if (!last || Math.abs(last[0]-u.lat) > 0.00005 || Math.abs(last[1]-u.lng) > 0.00005) {
-                    t.pts.push([u.lat, u.lng]);
-                    if(t.pts.length > 50) t.pts.shift();
-                    
+                    t.pts.push([u.lat, u.lng]); if(t.pts.length > 50) t.pts.shift();
                     if (t.line) map.removeLayer(t.line);
                     if (showTrails) {
                         const col = u.status === 'CONTACT' ? '#ef4444' : (u.id === me.id ? '#3b82f6' : '#22c55e');
@@ -143,66 +103,64 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                     }
                 }
             });
-
-            // Auto-center on me once
-            if (me && me.lat && !window.hasCentered) {
-                map.setView([me.lat, me.lng], 16);
-                window.hasCentered = true;
-            }
+            if (me && me.lat && !window.hasCentered) { map.setView([me.lat, me.lng], 16); window.hasCentered = true; }
         }
 
-        function updatePings(serverPings) {
-            // Simple full refresh for safety
-            Object.values(pings).forEach(p => map.removeLayer(p));
-            
+        function updatePings(serverPings, showPings, isHost, myCallsign) {
+            // GESTION SHOW/HIDE
+            if (!showPings) { pingLayer.clearLayers(); return; }
+            if (!map.hasLayer(pingLayer)) map.addLayer(pingLayer);
+
+            const currentIds = serverPings.map(p => p.id);
+            Object.keys(pings).forEach(id => { if(!currentIds.includes(id)) { pingLayer.removeLayer(pings[id]); delete pings[id]; } });
+
             serverPings.forEach(p => {
-                const icon = L.divIcon({
-                    className: 'custom-div-icon',
-                    html: \`<div class="ping-marker"><div style="font-size:30px">📍</div><div class="ping-msg">\${p.sender}: \${p.msg}</div></div>\`,
-                    iconSize: [100, 60], iconAnchor: [50, 50]
-                });
-                const m = L.marker([p.lat, p.lng], {icon: icon, zIndexOffset: 2000}).addTo(map);
-                m.on('click', () => window.ReactNativeWebView.postMessage(JSON.stringify({type: 'PING_CLICK', id: p.id})));
-                pings[p.id] = m;
+                // LOGIQUE DROIT DE DEPLACEMENT
+                const canDrag = isHost || (p.sender === myCallsign);
+                
+                if (pings[p.id]) {
+                    pings[p.id].setLatLng([p.lat, p.lng]);
+                    // Leaflet hack pour changer draggable dynamiquement
+                    if (pings[p.id].dragging) { 
+                        canDrag ? pings[p.id].dragging.enable() : pings[p.id].dragging.disable(); 
+                    }
+                } else {
+                    const icon = L.divIcon({ className: 'custom-div-icon', html: \`<div class="ping-marker"><div style="font-size:30px">📍</div><div class="ping-msg">\${p.sender}: \${p.msg}</div></div>\`, iconSize: [100, 60], iconAnchor: [50, 50] });
+                    
+                    const m = L.marker([p.lat, p.lng], { icon: icon, draggable: canDrag, zIndexOffset: 2000 });
+                    
+                    m.on('dragend', (e) => {
+                        const pos = e.target.getLatLng();
+                        sendToApp({ type: 'PING_MOVE', id: p.id, lat: pos.lat, lng: pos.lng });
+                    });
+                    m.on('click', () => sendToApp({ type: 'PING_CLICK', id: p.id }));
+                    
+                    pings[p.id] = m;
+                    pingLayer.addLayer(m);
+                }
             });
         }
 
-        // INTERACTION
-        map.on('click', (e) => {
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'MAP_CLICK', 
-                lat: e.latlng.lat, 
-                lng: e.latlng.lng
-            }));
-        });
-
+        map.on('click', (e) => sendToApp({ type: 'MAP_CLICK', lat: e.latlng.lat, lng: e.latlng.lng }));
       </script>
     </body>
     </html>
   `;
 
-  // --- COMMUNICATION REACT NATIVE -> WEBVIEW ---
   useEffect(() => {
     if (webViewRef.current) {
-      const payload = JSON.stringify({
-        type: 'UPDATE_MAP',
-        me, peers, pings, mode: mapMode, showTrails
-      });
-      webViewRef.current.postMessage(payload);
+      webViewRef.current.postMessage(JSON.stringify({
+        type: 'UPDATE_MAP', me, peers, pings, mode: mapMode, showTrails, showPings, isHost
+      }));
     }
-  }, [me, peers, pings, mapMode, showTrails]);
+  }, [me, peers, pings, mapMode, showTrails, showPings, isHost]);
 
-  // --- GESTION DES MESSAGES RETOUR (Clicks) ---
   const handleMessage = (event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
-      if (data.type === 'MAP_CLICK') {
-        if (pingMode) onPing({ lat: data.lat, lng: data.lng });
-      }
-      if (data.type === 'PING_CLICK') {
-        // Optionnel : Gérer le clic sur un ping (ex: supprimer)
-        if (pingMode) onPingDelete(data.id);
-      }
+      if (data.type === 'MAP_CLICK' && pingMode) onPing({ lat: data.lat, lng: data.lng });
+      if (data.type === 'PING_CLICK') onPingDelete(data.id); 
+      if (data.type === 'PING_MOVE') onPingMove({ ...pings.find(p => p.id === data.id)!, lat: data.lat, lng: data.lng });
     } catch(e) {}
   };
 
