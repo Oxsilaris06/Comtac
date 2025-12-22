@@ -1,38 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
-// IMPORT CORRECT : Text est bien présent
-import { StyleSheet, View, Text, Platform } from 'react-native';
-import MapView, { UrlTile, Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
-import { MaterialIcons } from '@expo/vector-icons';
+import React, { useEffect, useRef } from 'react';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { UserData, PingData, OperatorStatus } from '../types';
-
-const TILE_URL_DARK = "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png";
-const TILE_URL_LIGHT = "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
-const TILE_URL_SAT = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
-
-const COLORS = {
-  [OperatorStatus.CLEAR]: '#22c55e',
-  [OperatorStatus.CONTACT]: '#ef4444',
-  [OperatorStatus.BUSY]: '#a855f7',
-  [OperatorStatus.APPUI]: '#eab308',
-  [OperatorStatus.PROGRESSION]: '#3b82f6',
-};
-
-// SÉCURITÉ : Ignore les coordonnées invalides (Null Island)
-const isValidCoord = (val: any): boolean => {
-  return typeof val === 'number' && !isNaN(val) && val !== null && Math.abs(val) > 0.0001;
-};
-
-// STYLE : Rend le fond Google Maps invisible pour laisser place à OSM
-const BLANK_MAP_STYLE = [
-  { "elementType": "geometry", "stylers": [{ "color": "#212121" }] },
-  { "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
-  { "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
-  { "elementType": "labels.text.stroke", "stylers": [{ "color": "#212121" }] },
-  { "featureType": "administrative", "elementType": "geometry", "stylers": [{ "color": "#757575" }] },
-  { "featureType": "poi", "stylers": [{ "visibility": "off" }] },
-  { "featureType": "road", "stylers": [{ "visibility": "off" }] },
-  { "featureType": "transit", "stylers": [{ "visibility": "off" }] }
-];
 
 interface TacticalMapProps {
   me: UserData;
@@ -50,175 +19,213 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
   me, peers, pings, mapMode, showTrails, pingMode,
   onPing, onPingMove, onPingDelete
 }) => {
-  const mapRef = useRef<MapView>(null);
-  const [trails, setTrails] = useState<Record<string, {latitude: number, longitude: number}[]>>({});
-  const [hasCentered, setHasCentered] = useState(false);
+  const webViewRef = useRef<WebView>(null);
 
-  let currentTileUrl = TILE_URL_DARK;
-  if (mapMode === 'light') currentTileUrl = TILE_URL_LIGHT;
-  if (mapMode === 'satellite') currentTileUrl = TILE_URL_SAT;
-
-  // 1. Centrage automatique (Sécurisé)
-  useEffect(() => {
-    if (!hasCentered && me && isValidCoord(me.lat) && isValidCoord(me.lng) && mapRef.current) {
-        mapRef.current.animateToRegion({
-            latitude: me.lat, longitude: me.lng,
-            latitudeDelta: 0.01, longitudeDelta: 0.01,
-        }, 1000);
-        setHasCentered(true);
-    }
-  }, [me?.lat, me?.lng, hasCentered]);
-
-  // 2. Gestion des Tracés (Trails)
-  useEffect(() => {
-    if (!showTrails) return;
-    setTrails(prev => {
-      const next = { ...prev };
-      
-      const addPoint = (id: string, lat?: number, lng?: number) => {
-        if (!isValidCoord(lat) || !isValidCoord(lng)) return;
+  // --- LE COEUR DU SYSTÈME : Une page Web Leaflet complète ---
+  const leafletHTML = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+      <style>
+        body { margin: 0; padding: 0; background: #000; }
+        #map { width: 100vw; height: 100vh; }
+        .leaflet-control-attribution { display: none; }
         
-        if (!next[id]) next[id] = [];
-        const history = next[id];
-        const last = history[history.length - 1];
-
-        // Filtre de mouvement (> 5m)
-        if (!last || (Math.abs(last.latitude - lat!) > 0.00005 || Math.abs(last.longitude - lng!) > 0.00005)) {
-          history.push({ latitude: lat!, longitude: lng! });
-          if (history.length > 50) history.shift();
+        /* Styles des Marqueurs (Copie conforme du Web) */
+        .tac-wrapper { transition: transform 0.3s linear; will-change: transform; }
+        .tac-arrow {
+            width: 0; height: 0;
+            border-left: 10px solid transparent; border-right: 10px solid transparent;
+            border-bottom: 24px solid #3b82f6; 
+            filter: drop-shadow(0 0 4px #3b82f6);
         }
-      };
+        .tac-label {
+            position: absolute; top: 28px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.85); color: white; padding: 2px 6px;
+            border-radius: 4px; font-family: monospace; font-size: 10px; font-weight: bold;
+            white-space: nowrap; border: 1px solid #3b82f6;
+        }
+        /* Status Colors */
+        .status-CONTACT .tac-arrow { border-bottom-color: #ef4444; filter: drop-shadow(0 0 8px red); }
+        .status-CONTACT .tac-label { border-color: #ef4444; color: #ef4444; }
+        .status-CLEAR .tac-arrow { border-bottom-color: #22c55e; }
+        .status-CLEAR .tac-label { border-color: #22c55e; color: #22c55e; }
+        .status-APPUI .tac-arrow { border-bottom-color: #eab308; }
+        .status-APPUI .tac-label { border-color: #eab308; color: #eab308; }
+        .status-BUSY .tac-arrow { border-bottom-color: #a855f7; }
+        .status-BUSY .tac-label { border-color: #a855f7; color: #a855f7; }
 
-      if (me) addPoint('me', me.lat, me.lng);
-      if (peers) {
-        Object.values(peers).forEach(p => {
-          if (p) addPoint(p.id, p.lat, p.lng);
+        .ping-marker { text-align: center; color: #ef4444; font-weight: bold; text-shadow: 0 0 5px black; }
+        .ping-msg { background: #ef4444; color: white; padding: 2px 4px; border-radius: 4px; font-size: 10px; }
+      </style>
+      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    </head>
+    <body>
+      <div id="map"></div>
+      <script>
+        // INIT MAP
+        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([48.85, 2.35], 13);
+        
+        // LAYERS
+        const layers = {
+            dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {subdomains:'abcd', maxZoom:19}),
+            light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {subdomains:'abcd', maxZoom:19}),
+            satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:19})
+        };
+        let currentLayer = layers.dark;
+        currentLayer.addTo(map);
+
+        // DATA STORE
+        const markers = {};
+        const trails = {};
+        const pings = {};
+        let myId = null;
+
+        // COMMUNICATION APP -> WEBVIEW
+        document.addEventListener('message', (event) => {
+            handleData(JSON.parse(event.data));
         });
-      }
-      return next;
-    });
-  }, [me?.lat, me?.lng, peers, showTrails]);
+        window.addEventListener('message', (event) => { // Support iOS
+            handleData(JSON.parse(event.data));
+        });
 
-  const renderMarker = (u: UserData, isMe: boolean) => {
-    if (!u || !isValidCoord(u.lat) || !isValidCoord(u.lng)) return null;
-    const color = COLORS[u.status] || COLORS.CLEAR;
-    
-    return (
-      <Marker
-        key={u.id}
-        coordinate={{ latitude: u.lat, longitude: u.lng }}
-        anchor={{ x: 0.5, y: 0.5 }}
-        flat={true}
-        rotation={u.head || 0}
-        // CORRECTION Z-INDEX : Me=100, Peers=50. C'est > UrlTile(1) donc visible.
-        zIndex={isMe ? 100 : 50} 
-      >
-        <View style={styles.markerContainer}>
-          <View style={[styles.labelBadge, { borderColor: color }]}>
-            <Text style={[styles.labelText, { color: color }]}>{u.callsign}</Text>
-          </View>
-          <MaterialIcons name="navigation" size={32} color={color} />
-        </View>
-      </Marker>
-    );
+        function handleData(data) {
+            if (data.type === 'UPDATE_MAP') {
+                updateMapMode(data.mode);
+                updateMarkers(data.me, data.peers, data.showTrails);
+                updatePings(data.pings);
+            }
+        }
+
+        function updateMapMode(mode) {
+            const newLayer = layers[mode] || layers.dark;
+            if (currentLayer !== newLayer) {
+                map.removeLayer(currentLayer);
+                newLayer.addTo(map);
+                currentLayer = newLayer;
+            }
+        }
+
+        function updateMarkers(me, peers, showTrails) {
+            const all = [me, ...Object.values(peers)].filter(u => u && u.lat);
+            
+            // Cleanup old markers
+            const activeIds = all.map(u => u.id);
+            Object.keys(markers).forEach(id => {
+                if(!activeIds.includes(id)) { map.removeLayer(markers[id]); delete markers[id]; }
+            });
+
+            all.forEach(u => {
+                const iconHtml = \`<div class="tac-wrapper status-\${u.status}" style="transform: rotate(\${u.head||0}deg);"><div class="tac-arrow"></div></div><div class="tac-label status-\${u.status}">\${u.callsign}</div>\`;
+                const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [40, 40], iconAnchor: [20, 20] });
+
+                if (markers[u.id]) {
+                    markers[u.id].setLatLng([u.lat, u.lng]);
+                    markers[u.id].setIcon(icon);
+                } else {
+                    markers[u.id] = L.marker([u.lat, u.lng], {icon: icon, zIndexOffset: u.id === me.id ? 1000 : 500}).addTo(map);
+                }
+
+                // Trails
+                if (!trails[u.id]) trails[u.id] = { pts: [], line: null };
+                const t = trails[u.id];
+                const last = t.pts[t.pts.length - 1];
+                if (!last || Math.abs(last[0]-u.lat) > 0.00005 || Math.abs(last[1]-u.lng) > 0.00005) {
+                    t.pts.push([u.lat, u.lng]);
+                    if(t.pts.length > 50) t.pts.shift();
+                    
+                    if (t.line) map.removeLayer(t.line);
+                    if (showTrails) {
+                        const col = u.status === 'CONTACT' ? '#ef4444' : (u.id === me.id ? '#3b82f6' : '#22c55e');
+                        t.line = L.polyline(t.pts, {color: col, weight: 2, dashArray: '4,4', opacity: 0.6}).addTo(map);
+                    }
+                }
+            });
+
+            // Auto-center on me once
+            if (me && me.lat && !window.hasCentered) {
+                map.setView([me.lat, me.lng], 16);
+                window.hasCentered = true;
+            }
+        }
+
+        function updatePings(serverPings) {
+            // Simple full refresh for safety
+            Object.values(pings).forEach(p => map.removeLayer(p));
+            
+            serverPings.forEach(p => {
+                const icon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: \`<div class="ping-marker"><div style="font-size:30px">📍</div><div class="ping-msg">\${p.sender}: \${p.msg}</div></div>\`,
+                    iconSize: [100, 60], iconAnchor: [50, 50]
+                });
+                const m = L.marker([p.lat, p.lng], {icon: icon, zIndexOffset: 2000}).addTo(map);
+                m.on('click', () => window.ReactNativeWebView.postMessage(JSON.stringify({type: 'PING_CLICK', id: p.id})));
+                pings[p.id] = m;
+            });
+        }
+
+        // INTERACTION
+        map.on('click', (e) => {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'MAP_CLICK', 
+                lat: e.latlng.lat, 
+                lng: e.latlng.lng
+            }));
+        });
+
+      </script>
+    </body>
+    </html>
+  `;
+
+  // --- COMMUNICATION REACT NATIVE -> WEBVIEW ---
+  useEffect(() => {
+    if (webViewRef.current) {
+      const payload = JSON.stringify({
+        type: 'UPDATE_MAP',
+        me, peers, pings, mode: mapMode, showTrails
+      });
+      webViewRef.current.postMessage(payload);
+    }
+  }, [me, peers, pings, mapMode, showTrails]);
+
+  // --- GESTION DES MESSAGES RETOUR (Clicks) ---
+  const handleMessage = (event: any) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === 'MAP_CLICK') {
+        if (pingMode) onPing({ lat: data.lat, lng: data.lng });
+      }
+      if (data.type === 'PING_CLICK') {
+        // Optionnel : Gérer le clic sur un ping (ex: supprimer)
+        if (pingMode) onPingDelete(data.id);
+      }
+    } catch(e) {}
   };
 
   return (
     <View style={styles.container}>
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        provider={PROVIDER_DEFAULT}
-        mapType="standard" /* FIX: Standard initialise le moteur */
-        customMapStyle={BLANK_MAP_STYLE} /* FIX: Invisible pour laisser place à OSM */
-        rotateEnabled={true}
-        showsUserLocation={false}
-        moveOnMarkerPress={false}
-        onPress={(e) => { if(pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
-        onLongPress={(e) => { if(!pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
-        initialRegion={{
-            latitude: 48.8566, longitude: 2.3522,
-            latitudeDelta: 0.05, longitudeDelta: 0.05,
-        }}
-      >
-        {/* TUILE : zIndex=1 (Fond) + shouldReplaceMapContent=true (Force l'affichage) */}
-        <UrlTile
-          key={mapMode}
-          urlTemplate={currentTileUrl}
-          maximumZ={19}
-          flipY={false}
-          zIndex={1} 
-          tileSize={256}
-          shouldReplaceMapContent={true} 
-        />
-
-        {showTrails && Object.entries(trails).map(([id, coords]) => {
-           const isMe = id === 'me';
-           const userObj = isMe ? me : Object.values(peers).find(p => p.id === id);
-           const color = userObj ? (COLORS[userObj.status] || COLORS.CLEAR) : '#888';
-           if (coords.length < 2) return null;
-           
-           // TRAIL : zIndex=10 (Au dessus de la carte, sous les marqueurs)
-           return (
-             <Polyline
-               key={`trail-${id}`}
-               coordinates={coords}
-               strokeColor={color}
-               strokeWidth={isMe ? 3 : 2}
-               lineDashPattern={isMe ? [0] : [5, 5]}
-               zIndex={10}
-             />
-           );
-        })}
-
-        {renderMarker(me, true)}
-        {peers && Object.values(peers).map(p => renderMarker(p, false))}
-
-        {pings && pings.map(ping => {
-            if(!isValidCoord(ping.lat) || !isValidCoord(ping.lng)) return null;
-            // PING : zIndex=200 (Tout au dessus)
-            return (
-              <Marker
-                key={ping.id}
-                coordinate={{ latitude: ping.lat, longitude: ping.lng }}
-                draggable={ping.sender === me?.callsign}
-                onDragEnd={(e) => onPingMove({ ...ping, lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude })}
-                onCalloutPress={() => { if (ping.sender === me?.callsign || me?.role === 'HOST') onPingDelete(ping.id); }}
-                zIndex={200}
-              >
-                <View style={styles.pingMarker}>
-                  <MaterialIcons name="location-on" size={40} color="#ef4444" />
-                  <View style={styles.pingLabel}>
-                     <Text style={styles.pingText}>{ping.msg}</Text>
-                     <Text style={styles.pingSender}>{ping.sender}</Text>
-                  </View>
-                </View>
-              </Marker>
-            );
-        })}
-      </MapView>
+      <WebView
+        ref={webViewRef}
+        originWhitelist={['*']}
+        source={{ html: leafletHTML }}
+        style={{ flex: 1, backgroundColor: '#000' }}
+        onMessage={handleMessage}
+        javaScriptEnabled={true}
+        domStorageEnabled={true}
+        startInLoadingState={true}
+        renderLoading={() => <ActivityIndicator size="large" color="#3b82f6" style={styles.loader} />}
+      />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#212121' },
-  map: { width: '100%', height: '100%' },
-  markerContainer: { alignItems: 'center', justifyContent: 'center', width: 60, height: 60 },
-  labelBadge: {
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    paddingHorizontal: 4, paddingVertical: 2,
-    borderRadius: 4, borderWidth: 1, marginBottom: 2,
-  },
-  labelText: { fontSize: 10, fontWeight: 'bold' },
-  pingMarker: { alignItems: 'center' },
-  pingLabel: {
-    position: 'absolute', top: 35,
-    backgroundColor: '#ef4444', padding: 4, borderRadius: 4,
-    alignItems: 'center', minWidth: 60,
-  },
-  pingText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
-  pingSender: { color: 'white', fontSize: 8 }
+  container: { flex: 1, backgroundColor: '#000' },
+  loader: { position: 'absolute', top: '50%', left: '50%', transform: [{translateX: -25}, {translateY: -25}] }
 });
 
 export default TacticalMap;
