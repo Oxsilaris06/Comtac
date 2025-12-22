@@ -19,7 +19,8 @@
       "infoPlist": {
         "UIBackgroundModes": [
           "audio",
-          "voip"
+          "voip",
+          "fetch"
         ]
       }
     },
@@ -30,6 +31,8 @@
       },
       "package": "com.tactical.comtac",
       "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_FINE_LOCATION",
@@ -39,12 +42,7 @@
         "android.permission.BATTERY_STATS",
         "android.permission.BLUETOOTH",
         "android.permission.MODIFY_AUDIO_SETTINGS"
-      ],
-      "config": {
-        "googleMaps": {
-          "apiKey": "AIzaSyFakeKey_BypassForOSM_123456789"
-        }
-      }
+      ]
     },
     "plugins": [
       [
@@ -71,13 +69,7 @@
           }
         }
       ],
-      [
-        "@config-plugins/react-native-webrtc",
-        {
-          "cameraPermission": "Autoriser la caméra pour le scan QR",
-          "microphonePermission": "Autoriser le micro pour la communication"
-        }
-      ]
+      "@config-plugins/react-native-webrtc"
     ]
   }
 }
