@@ -60,12 +60,14 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  // BATTERIE
   useEffect(() => {
-    Battery.getBatteryLevelAsync().then(level => setUser(u => ({ ...u, bat: Math.floor(level * 100) })));
+    Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) })));
     const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) })));
     return () => sub && sub.remove();
   }, []);
 
+  // BACK BUTTON
   useEffect(() => {
     const backAction = () => {
       if (view === 'ops' || view === 'map') {
@@ -85,7 +87,6 @@ const App: React.FC = () => {
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
     setToast({ msg, type });
     if (type === 'error') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    else Haptics.selectionAsync();
     setTimeout(() => setToast(null), 3000);
   }, []);
 
@@ -95,7 +96,7 @@ const App: React.FC = () => {
       audioService.setTx(false); setVoxActive(false);
   };
 
-  const copyToClipboard = async () => { if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié !"); } };
+  const copyToClipboard = async () => { if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié"); } };
 
   const broadcast = useCallback((data: any) => {
     if (!data.type && data.user) data = { type: 'UPDATE', user: data.user };
@@ -104,6 +105,7 @@ const App: React.FC = () => {
   }, [user.id]);
 
   const handleData = useCallback((data: any, fromId: string) => {
+    // 🛡️ ANTI-CLONE STRICT
     if (data.from === user.id) return;
     if (data.user && data.user.id === user.id) return;
 
@@ -240,15 +242,6 @@ const App: React.FC = () => {
     });
     conn.on('data', (data: any) => handleData(data, targetId));
   }, [user, handleData, showToast]);
-
-  const setStatus = (s: OperatorStatus) => {
-    setUser(prev => {
-      const u = { ...prev, status: s };
-      broadcast({ type: 'UPDATE', user: u });
-      return u;
-    });
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
 
   const startServices = async () => {
     await audioService.init();
