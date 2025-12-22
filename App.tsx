@@ -55,6 +55,8 @@ const App: React.FC = () => {
   const [showQRModal, setShowQRModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPingModal, setShowPingModal] = useState(false);
+  
+  // Selection pour Modale Action
   const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(null);
   
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
@@ -65,18 +67,21 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  // CHARGEMENT MEMOIRE
   useEffect(() => {
     AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
       if (saved) setLoginInput(saved);
     });
   }, []);
 
+  // BATTERIE
   useEffect(() => {
     Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) })));
     const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) })));
     return () => sub && sub.remove();
   }, []);
 
+  // BOUSSOLE / MAGNETOMETRE
   useEffect(() => {
     Magnetometer.setUpdateInterval(100);
     const subscription = Magnetometer.addListener((data) => {
@@ -91,8 +96,13 @@ const App: React.FC = () => {
     return () => subscription && subscription.remove();
   }, []);
 
+  // GESTION RETOUR ARRIERE
   useEffect(() => {
     const backAction = () => {
+      if (selectedOperatorId) { setSelectedOperatorId(null); return true; }
+      if (showQRModal) { setShowQRModal(false); return true; }
+      if (showScanner) { setShowScanner(false); return true; }
+      
       if (view === 'ops' || view === 'map') {
         Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]);
         return true;
@@ -101,7 +111,7 @@ const App: React.FC = () => {
     };
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
-  }, [view, user.role]);
+  }, [view, user.role, selectedOperatorId, showQRModal, showScanner]);
 
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
     setToast({ msg, type });
@@ -124,6 +134,21 @@ const App: React.FC = () => {
     Object.values(connectionsRef.current).forEach((conn: any) => { if (conn.open) conn.send(data); });
   }, [user.id]);
 
+  // --- LOGIQUE CRITIQUE DE FUSION (ANTI-DOUBLON) ---
+  const mergePeer = useCallback((newPeer: UserData) => {
+    setPeers(prev => {
+        const next = { ...prev };
+        // Si le trigramme existe déjà sous un autre ID (ancienne session), on supprime l'ancien
+        const oldId = Object.keys(next).find(key => 
+            next[key].callsign === newPeer.callsign && key !== newPeer.id
+        );
+        if (oldId) delete next[oldId];
+        
+        next[newPeer.id] = newPeer;
+        return next;
+    });
+  }, []);
+
   const handleData = useCallback((data: any, fromId: string) => {
     if (data.from === user.id) return;
     if (data.user && data.user.id === user.id) return;
@@ -131,18 +156,14 @@ const App: React.FC = () => {
     switch (data.type) {
       case 'UPDATE': case 'FULL': case 'UPDATE_USER':
         if (data.user && data.user.id !== user.id) {
-             setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
+             mergePeer(data.user);
         }
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
         if (list.length > 0) {
-            setPeers(prev => {
-                const next = { ...prev };
-                list.forEach((u: UserData) => { 
-                    if(u.id && u.id !== user.id) next[u.id] = u; 
-                });
-                return next;
+            list.forEach((u: UserData) => { 
+                if(u.id && u.id !== user.id) mergePeer(u); 
             });
         }
         if (data.silence !== undefined) setSilenceMode(data.silence);
@@ -180,7 +201,7 @@ const App: React.FC = () => {
         handleLogout(); 
         break;
     }
-  }, [user.id, showToast]);
+  }, [user.id, showToast, mergePeer]);
 
   const enterPrivateMode = (targetId: string) => {
       setPrivatePeerId(targetId);
@@ -200,6 +221,7 @@ const App: React.FC = () => {
       setBannedPeers(prev => [...prev, targetId]);
       if (conn) conn.close();
       delete connectionsRef.current[targetId];
+      // Suppression immédiate de la liste locale
       setPeers(prev => { const next = {...prev}; delete next[targetId]; return next; });
       setSelectedOperatorId(null);
       showToast("Utilisateur Banni");
@@ -207,21 +229,29 @@ const App: React.FC = () => {
 
   const handleRequestPrivate = (targetId: string) => {
       const conn = connectionsRef.current[targetId];
-      if(conn) conn.send({ type: 'PRIVATE_REQ', from: user.id });
+      if(conn) {
+          conn.send({ type: 'PRIVATE_REQ', from: user.id });
+          showToast("Demande envoyée");
+      } else {
+          showToast("Erreur de connexion", "error");
+      }
       setSelectedOperatorId(null);
-      showToast("Demande envoyée");
   };
 
+  // --- MIGRATION D'HÔTE (Préservée) ---
   const handleHostDisconnect = () => {
       if (user.role === OperatorRole.HOST) return;
       showToast("CONNEXION PERDUE - MIGRATION...", "error");
+      
       const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
       candidates.push(user);
+      // Tri par ancienneté pour élire le chef
       candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+      
       const newHost = candidates[0];
-      if (newHost.id === user.id) {
+      if (newHost && newHost.id === user.id) {
           promoteToHost();
-      } else {
+      } else if (newHost) {
           setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
       }
   };
@@ -271,7 +301,11 @@ const App: React.FC = () => {
       call.on('stream', (rs) => audioService.playStream(rs));
     });
     
-    p.on('error', (err) => { if (err.type === 'peer-unavailable') {} });
+    p.on('error', (err) => { 
+        if (err.type === 'peer-unavailable' || err.type === 'network') {
+            // Géré par handleHostDisconnect si c'était l'hôte
+        }
+    });
   }, [peers, user, handleData, showToast, silenceMode, pings, bannedPeers]);
 
   const connectToHost = useCallback((targetId: string) => {
@@ -318,7 +352,7 @@ const App: React.FC = () => {
       (loc) => {
         const { latitude, longitude, speed, heading, accuracy } = loc.coords;
         
-        // FIX: Rejet des points fantômes (Précision > 30m ignorée)
+        // FIX: Filtre Ghost GPS (Précision > 30m ignorée)
         if (accuracy && accuracy > 30) return;
 
         setUser(prev => {
@@ -409,6 +443,7 @@ const App: React.FC = () => {
   );
 
   const renderDashboard = () => {
+    // Filtrage visuel final (même si mergePeer fait le travail)
     const filteredPeers = Object.values(peers).filter(p => p.id !== user.id);
     const totalOperators = 1 + filteredPeers.length;
     const cardWidth = totalOperators === 1 ? '100%' : '48%';
@@ -520,8 +555,24 @@ const App: React.FC = () => {
                     <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
                 </TouchableOpacity>
                 <TouchableOpacity 
-                    onPressIn={() => { if(silenceMode && user.role !== OperatorRole.HOST) return; if(!voxActive) { audioService.setTx(true); setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}} 
-                    onPressOut={() => { if(!voxActive) { audioService.setTx(false); setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); }}} 
+                    onPressIn={() => { 
+                        if(silenceMode && user.role !== OperatorRole.HOST) return; 
+                        if(!voxActive) { 
+                            // Half-Duplex : Mute reception quand on parle (sauf Hôte)
+                            if (user.role !== OperatorRole.HOST) audioService.muteIncoming(true);
+                            
+                            audioService.setTx(true); 
+                            setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); 
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
+                        }
+                    }} 
+                    onPressOut={() => { 
+                        if(!voxActive) { 
+                            audioService.setTx(false); 
+                            if (user.role !== OperatorRole.HOST) audioService.muteIncoming(false);
+                            setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); 
+                        }
+                    }} 
                     style={[styles.pttBtn, user.isTx ? {backgroundColor: '#2563eb'} : null, silenceMode && user.role !== OperatorRole.HOST ? {opacity:0.5} : null]}
                     disabled={silenceMode && user.role !== OperatorRole.HOST}
                 >
@@ -544,7 +595,13 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      <Modal visible={!!selectedOperatorId} animationType="fade" transparent>
+      {/* MODALE PLACÉE ICI POUR LE Z-INDEX */}
+      <Modal 
+        visible={!!selectedOperatorId} 
+        animationType="fade" 
+        transparent
+        onRequestClose={() => setSelectedOperatorId(null)}
+      >
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedOperatorId(null)}>
            <View style={[styles.modalContent, { backgroundColor: '#18181b', borderColor: '#333', borderWidth: 1 }]}>
                <Text style={[styles.modalTitle, {color: 'white'}]}>ACTION OPÉRATEUR</Text>
