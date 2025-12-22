@@ -40,8 +40,10 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         .status-CLEAR .tac-arrow { border-bottom-color: #22c55e; } .status-CLEAR .tac-label { border-color: #22c55e; color: #22c55e; }
         .status-APPUI .tac-arrow { border-bottom-color: #eab308; } .status-APPUI .tac-label { border-color: #eab308; color: #eab308; }
         .status-BUSY .tac-arrow { border-bottom-color: #a855f7; } .status-BUSY .tac-label { border-color: #a855f7; color: #a855f7; }
-        .ping-marker { text-align: center; color: #ef4444; font-weight: bold; text-shadow: 0 0 5px black; }
-        .ping-msg { background: #ef4444; color: white; padding: 2px 4px; border-radius: 4px; font-size: 10px; }
+        
+        /* CSS MODIFIÉ POUR TRANSPARENCE DES PINGS */
+        .ping-marker { text-align: center; color: rgba(239, 68, 68, 0.7); font-weight: bold; text-shadow: 0 0 5px black; }
+        .ping-msg { background: rgba(239, 68, 68, 0.6); color: white; padding: 2px 4px; border-radius: 4px; font-size: 10px; backdrop-filter: blur(2px); }
       </style>
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     </head>
@@ -102,7 +104,16 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                     }
                 }
             });
-            if (me && me.lat && !window.hasCentered) { map.setView([me.lat, me.lng], 16); window.hasCentered = true; }
+
+            // LOGIQUE DE CENTRAGE AUTOMATIQUE AMÉLIORÉE
+            // On ne centre que si la position est valide et différente de la valeur par défaut (Paris)
+            if (me && me.lat) {
+                const isDefault = Math.abs(me.lat - 48.8566) < 0.001 && Math.abs(me.lng - 2.3522) < 0.001;
+                if (!isDefault && !window.hasCenteredReal) { 
+                    map.setView([me.lat, me.lng], 16); 
+                    window.hasCenteredReal = true; 
+                }
+            }
         }
 
         function updatePings(serverPings, showPings, isHost, myCallsign) {
