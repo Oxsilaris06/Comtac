@@ -1,10 +1,8 @@
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
 import { Platform } from 'react-native';
 
-// IMPORTS STATIQUES OBLIGATOIRES (Stabilité Hermes)
-// Si le build échoue ici, c'est que les modules ne sont pas installés (npm install requis)
+// IMPORTS NETTOYÉS
 import RNSoundLevel from 'react-native-sound-level';
-import MusicControl, { Command } from 'react-native-music-control';
 
 class AudioService {
   stream: MediaStream | null = null;
@@ -21,42 +19,7 @@ class AudioService {
       this.stream = stream;
       this.setTx(false);
 
-      // --- SETUP BLUETOOTH (Sécurisé) ---
-      try {
-          if (Platform.OS === 'android') {
-             // Configuration minimale pour éviter le crash "Icon not found"
-             MusicControl.enableBackgroundMode(true);
-             MusicControl.setNowPlaying({
-                title: 'COM TAC',
-                artist: 'Canal Actif',
-                album: 'Tactical',
-                duration: 0, 
-                color: 0xFF3b82f6,
-                // notificationIcon: 'play' <--- LIGNE SUPPRIMÉE (CAUSE DU CRASH)
-                // Android utilisera l'icône de l'app par défaut
-             });
-             
-             MusicControl.enableControl('play', true);
-             MusicControl.enableControl('pause', true);
-             MusicControl.enableControl('togglePlayPause', true);
-             // Stop doit être false sinon Android tue le service parfois
-             MusicControl.enableControl('stop', false); 
-
-             const toggle = () => {
-                 this.setTx(!this.isTx); 
-                 MusicControl.updatePlayback({
-                     state: !this.isTx ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED,
-                     elapsedTime: 0
-                 });
-             };
-
-             MusicControl.on(Command.play, toggle);
-             MusicControl.on(Command.pause, toggle);
-             MusicControl.on(Command.togglePlayPause, toggle);
-          }
-      } catch (e) { console.log("BT Error:", e); }
-
-      // --- SETUP VOX ---
+      // --- SETUP VOX (Conservation de la détection vocale) ---
       try {
           RNSoundLevel.start();
           RNSoundLevel.onNewFrame = (data: any) => {
@@ -92,10 +55,13 @@ class AudioService {
   }
 
   startMetering(callback: (level: number) => void) {
+    // Simulation simple du vumètre pour l'interface
     setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
 
-  playStream(remoteStream: MediaStream) { }
+  playStream(remoteStream: MediaStream) { 
+      // Placeholder pour future implémentation audio
+  }
 }
 
 export const audioService = new AudioService();
