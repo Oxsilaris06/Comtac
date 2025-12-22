@@ -15,6 +15,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: '' # Pas de cache pour éviter la corruption
 
       - name: Configuration de Java (JDK 17)
         uses: actions/setup-java@v4
@@ -25,10 +26,12 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: 8.8
+          gradle-version: 8.6 # FIX: Retour version stable pour RN 0.74
+          cache-read-only: false
 
-      - name: Installation des dépendances
+      - name: Installation des dépendances (Clean)
         run: |
+          npm cache clean --force
           npm install --legacy-peer-deps
           npx expo install --fix
 
@@ -46,7 +49,7 @@ jobs:
             --assets-dest android/app/src/main/res
 
       - name: Build Android APK
-        # FIX : Suppression de --offline. Internet est requis pour télécharger les plugins !
+        # Mémoire Max + Online
         run: |
           cd android
           chmod +x gradlew
