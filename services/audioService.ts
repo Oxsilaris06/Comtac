@@ -1,5 +1,8 @@
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
-// IMPORTS STATIQUES OBLIGATOIRES POUR EVITER L'ECRAN BLANC
+import { Platform } from 'react-native';
+
+// IMPORTS STATIQUES OBLIGATOIRES (Stabilité Hermes)
+// Si le build échoue ici, c'est que les modules ne sont pas installés (npm install requis)
 import RNSoundLevel from 'react-native-sound-level';
 import MusicControl, { Command } from 'react-native-music-control';
 
@@ -18,37 +21,42 @@ class AudioService {
       this.stream = stream;
       this.setTx(false);
 
-      // --- 1. CONFIGURATION BLUETOOTH ---
+      // --- SETUP BLUETOOTH (Sécurisé) ---
       try {
-          MusicControl.enableBackgroundMode(true);
-          MusicControl.setNowPlaying({
-            title: 'COM TAC',
-            artist: 'Canal Actif',
-            album: 'Tactical',
-            duration: 0, 
-            color: 0xFF3b82f6,
-            notificationIcon: 'play' 
-          });
-          
-          MusicControl.enableControl('play', true);
-          MusicControl.enableControl('pause', true);
-          MusicControl.enableControl('stop', false);
-          MusicControl.enableControl('togglePlayPause', true);
+          if (Platform.OS === 'android') {
+             // Configuration minimale pour éviter le crash "Icon not found"
+             MusicControl.enableBackgroundMode(true);
+             MusicControl.setNowPlaying({
+                title: 'COM TAC',
+                artist: 'Canal Actif',
+                album: 'Tactical',
+                duration: 0, 
+                color: 0xFF3b82f6,
+                // notificationIcon: 'play' <--- LIGNE SUPPRIMÉE (CAUSE DU CRASH)
+                // Android utilisera l'icône de l'app par défaut
+             });
+             
+             MusicControl.enableControl('play', true);
+             MusicControl.enableControl('pause', true);
+             MusicControl.enableControl('togglePlayPause', true);
+             // Stop doit être false sinon Android tue le service parfois
+             MusicControl.enableControl('stop', false); 
 
-          const toggleHandler = () => {
-              this.setTx(!this.isTx); 
-              MusicControl.updatePlayback({
-                  state: !this.isTx ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED,
-                  elapsedTime: 0
-              });
-          };
+             const toggle = () => {
+                 this.setTx(!this.isTx); 
+                 MusicControl.updatePlayback({
+                     state: !this.isTx ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED,
+                     elapsedTime: 0
+                 });
+             };
 
-          MusicControl.on(Command.play, toggleHandler);
-          MusicControl.on(Command.pause, toggleHandler);
-          MusicControl.on(Command.togglePlayPause, toggleHandler);
-      } catch (e) { console.log("MusicControl Error (Non bloquant):", e); }
+             MusicControl.on(Command.play, toggle);
+             MusicControl.on(Command.pause, toggle);
+             MusicControl.on(Command.togglePlayPause, toggle);
+          }
+      } catch (e) { console.log("BT Error:", e); }
 
-      // --- 2. CONFIGURATION VOX ---
+      // --- SETUP VOX ---
       try {
           RNSoundLevel.start();
           RNSoundLevel.onNewFrame = (data: any) => {
@@ -58,7 +66,7 @@ class AudioService {
                   this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
               }
           };
-      } catch (e) { console.log("SoundLevel Error (Non bloquant):", e); }
+      } catch (e) { console.log("VOX Error:", e); }
 
       return true;
     } catch (err) {
@@ -87,9 +95,7 @@ class AudioService {
     setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
 
-  playStream(remoteStream: MediaStream) {
-    // Géré automatiquement par WebRTC
-  }
+  playStream(remoteStream: MediaStream) { }
 }
 
 export const audioService = new AudioService();
