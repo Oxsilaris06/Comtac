@@ -1,7 +1,7 @@
 import { OperatorStatus } from './types';
 
 export const CONFIG = {
-  // Clés de stockage (compatibilité future)
+  // Clés de stockage
   SESSION_STORAGE_KEY: 'comtac_v14_session',
   TRIGRAM_STORAGE_KEY: 'comtac_v14_trigram',
   
