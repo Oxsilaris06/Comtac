@@ -14,6 +14,8 @@ import * as Clipboard from 'expo-clipboard';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// AJOUT: Capteurs pour l'orientation
+import { Magnetometer } from 'expo-sensors';
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
@@ -37,8 +39,10 @@ const App: React.FC = () => {
   const [view, setView] = useState<ViewType>('login');
   const [peers, setPeers] = useState<Record<string, UserData>>({});
   const [pings, setPings] = useState<PingData[]>([]);
-  const [hostId, setHostId] = useState<string>('');
+  // AJOUT: Liste des bannis (Kick définitif)
+  const [bannedPeers, setBannedPeers] = useState<string[]>([]);
   
+  const [hostId, setHostId] = useState<string>('');
   const [loginInput, setLoginInput] = useState('');
   const [hostInput, setHostInput] = useState('');
   const [pingMsgInput, setPingMsgInput] = useState('');
@@ -53,6 +57,9 @@ const App: React.FC = () => {
   const [showQRModal, setShowQRModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPingModal, setShowPingModal] = useState(false);
+  // AJOUT: Modale d'actions opérateur (remplace Alert système)
+  const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(null);
+  
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
   const [privatePeerId, setPrivatePeerId] = useState<string | null>(null);
 
@@ -61,7 +68,7 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // CHARGEMENT DU TRIGRAMME EN MÉMOIRE
+  // CHARGEMENT TRIGRAMME
   useEffect(() => {
     AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
       if (saved) setLoginInput(saved);
@@ -75,15 +82,34 @@ const App: React.FC = () => {
     return () => sub && sub.remove();
   }, []);
 
+  // ORIENTATION MAGNÉTIQUE (Boussole réelle)
+  useEffect(() => {
+    Magnetometer.setUpdateInterval(100);
+    const subscription = Magnetometer.addListener((data) => {
+      // Calcul de l'angle (0-360)
+      let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); 
+      angle = angle - 90; // Correction repère
+      if (angle < 0) angle = 360 + angle;
+      
+      setUser(prev => {
+          // On ne met à jour que si changement significatif pour éviter trop de re-renders
+          if (Math.abs(prev.head - angle) > 2) {
+              const u = { ...prev, head: Math.floor(angle) };
+              // Broadcast de l'orientation uniquement si on bouge pas trop (économie bande passante)
+              // Note: Idéalement on ne broadcast pas le heading à 10Hz, ici c'est local pour la fluidité
+              return u;
+          }
+          return prev;
+      });
+    });
+    return () => subscription && subscription.remove();
+  }, []);
+
   // BACK BUTTON
   useEffect(() => {
     const backAction = () => {
       if (view === 'ops' || view === 'map') {
-        Alert.alert(
-          "Déconnexion", 
-          user.role === OperatorRole.HOST ? "ATTENTION: Vous êtes l'Hôte. Le salon sera fermé." : "Quitter le réseau ?", 
-          [{ text: "Annuler", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]
-        );
+        Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]);
         return true;
       }
       return false;
@@ -102,6 +128,7 @@ const App: React.FC = () => {
       if (peerRef.current) peerRef.current.destroy();
       setPeers({}); setPings([]); setHostId(''); setView('login');
       audioService.setTx(false); setVoxActive(false);
+      setBannedPeers([]); // Reset des bans à la déco
   };
 
   const copyToClipboard = async () => { if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié"); } };
@@ -147,6 +174,7 @@ const App: React.FC = () => {
         showToast(data.state ? "SILENCE ACTIF" : "FIN SILENCE");
         break;
       case 'PRIVATE_REQ':
+        // Remplacé par une modale custom plus bas ou Alert native si nécessaire
         Alert.alert("Appel Privé", `Demande de ${data.from}`, [
             { text: "Refuser", style: "cancel" },
             { text: "Accepter", onPress: () => {
@@ -158,7 +186,12 @@ const App: React.FC = () => {
         break;
       case 'PRIVATE_ACK': enterPrivateMode(data.from); showToast("Canal Privé Établi"); break;
       case 'PRIVATE_END': leavePrivateMode(); showToast("Fin Canal Privé"); break;
-      case 'KICK': Alert.alert("Exclu", "Vous avez été exclu par l'Hôte."); handleLogout(); break;
+      case 'KICK': 
+        // Destruction immédiate pour empêcher la reconnexion auto
+        if (peerRef.current) peerRef.current.destroy(); 
+        Alert.alert("Exclu", "Vous avez été exclu par l'Hôte."); 
+        handleLogout(); 
+        break;
     }
   }, [user.id, showToast]);
 
@@ -174,29 +207,30 @@ const App: React.FC = () => {
       broadcast({ type: 'UPDATE', user: { ...user, status: OperatorStatus.CLEAR } });
   };
 
-  const kickUser = (targetId: string) => {
-      Alert.alert("Exclure", "Voulez-vous kicker cet opérateur ?", [
-          { text: "Annuler", style: "cancel" },
-          { text: "KICKER", style: "destructive", onPress: () => {
-              const conn = connectionsRef.current[targetId];
-              if (conn) conn.send({ type: 'KICK', from: user.id });
-              setPeers(prev => { const next = {...prev}; delete next[targetId]; return next; });
-              showToast("Utilisateur Exclu");
-          }}
-      ]);
+  // KICK DÉFINITIF
+  const handleKickUser = (targetId: string) => {
+      // 1. Envoyer le packet KICK
+      const conn = connectionsRef.current[targetId];
+      if (conn) conn.send({ type: 'KICK', from: user.id });
+      
+      // 2. Ajouter aux bannis
+      setBannedPeers(prev => [...prev, targetId]);
+      
+      // 3. Fermer la connexion
+      if (conn) conn.close();
+      delete connectionsRef.current[targetId];
+
+      // 4. Update UI
+      setPeers(prev => { const next = {...prev}; delete next[targetId]; return next; });
+      setSelectedOperatorId(null);
+      showToast("Utilisateur Banni");
   };
 
-  const requestPrivate = (targetId: string) => {
-      if (user.role === OperatorRole.HOST) {
-          Alert.alert("Action Chef", `Cible: ${peers[targetId]?.callsign || targetId}`, [
-              { text: "Appel Privé", onPress: () => { const conn = connectionsRef.current[targetId]; if(conn) conn.send({ type: 'PRIVATE_REQ', from: user.id }); } },
-              { text: "KICKER", style: 'destructive', onPress: () => kickUser(targetId) },
-              { text: "Annuler", style: "cancel" }
-          ]);
-      } else {
-          const conn = connectionsRef.current[targetId];
-          if(conn) conn.send({ type: 'PRIVATE_REQ', from: user.id });
-      }
+  const handleRequestPrivate = (targetId: string) => {
+      const conn = connectionsRef.current[targetId];
+      if(conn) conn.send({ type: 'PRIVATE_REQ', from: user.id });
+      setSelectedOperatorId(null);
+      showToast("Demande envoyée");
   };
 
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
@@ -216,6 +250,13 @@ const App: React.FC = () => {
     });
 
     p.on('connection', (conn) => {
+      // SÉCURITÉ : Vérifier si banni
+      if (bannedPeers.includes(conn.peer)) {
+          console.log(`Rejet connexion bannie: ${conn.peer}`);
+          conn.close();
+          return;
+      }
+
       connectionsRef.current[conn.peer] = conn;
       conn.on('data', (data: any) => handleData(data, conn.peer));
       conn.on('open', () => {
@@ -224,6 +265,10 @@ const App: React.FC = () => {
           conn.send({ type: 'SYNC', list: list, silence: silenceMode });
           pings.forEach(ping => conn.send({ type: 'PING', ping }));
         }
+      });
+      // Nettoyage si connexion perdue
+      conn.on('close', () => {
+          setPeers(prev => { const next = {...prev}; delete next[conn.peer]; return next; });
       });
     });
 
@@ -234,7 +279,7 @@ const App: React.FC = () => {
     });
     
     p.on('error', (err) => showToast(`Err: ${err.type}`, 'error'));
-  }, [peers, user, handleData, showToast, silenceMode, pings]);
+  }, [peers, user, handleData, showToast, silenceMode, pings, bannedPeers]);
 
   const connectToHost = useCallback((targetId: string) => {
     if (!peerRef.current || !audioService.stream) return;
@@ -248,6 +293,11 @@ const App: React.FC = () => {
       call.on('stream', (rs) => audioService.playStream(rs));
     });
     conn.on('data', (data: any) => handleData(data, targetId));
+    conn.on('close', () => {
+        // Auto-reconnect supprimé ici pour respecter le Kick, ou gérer intelligemment
+        showToast("Déconnecté de l'hôte", "error");
+        setPeers({});
+    });
   }, [user, handleData, showToast]);
 
   const startServices = async () => {
@@ -272,10 +322,14 @@ const App: React.FC = () => {
     Location.watchPositionAsync(
       { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
       (loc) => {
-        const { latitude, longitude, heading, speed } = loc.coords;
+        const { latitude, longitude, speed, heading } = loc.coords;
         setUser(prev => {
-          const newHead = (speed && speed > 0.5 && heading !== null) ? heading : prev.head;
-          const newUser = { ...prev, lat: latitude, lng: longitude, head: newHead || prev.head };
+          // Si vitesse faible, on garde l'orientation magnétique (déjà dans prev.head grâce au Magnetometer)
+          // Si vitesse élevée (>3km/h), on peut utiliser le GPS heading pour corriger
+          const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
+          
+          const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
+          
           if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
             broadcast({ type: 'UPDATE', user: newUser });
             lastLocationRef.current = { lat: latitude, lng: longitude };
@@ -289,12 +343,7 @@ const App: React.FC = () => {
   const handleLogin = async () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
-    
-    // SAUVEGARDE DU TRIGRAMME
-    try {
-        await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri);
-    } catch (e) {}
-
+    try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
     setUser(prev => ({ ...prev, callsign: tri }));
     await startServices();
     setView('menu');
@@ -365,7 +414,6 @@ const App: React.FC = () => {
   );
 
   const renderDashboard = () => {
-    // Calcul de la taille dynamique des cartes
     const activePeersCount = Object.keys(peers).length;
     const totalOperators = 1 + activePeersCount;
     const cardWidth = totalOperators === 1 ? '100%' : '48%';
@@ -394,13 +442,12 @@ const App: React.FC = () => {
 
         <View style={styles.mainContent}>
             {view === 'ops' ? (
-                // AJOUT DU SCROLLVIEW + STYLE DYNAMIQUE
                 <ScrollView contentContainerStyle={styles.grid}>
                     <OperatorCard user={user} isMe style={{ width: cardWidth }} />
                     {Object.values(peers).map(p => (
                         <TouchableOpacity 
                             key={p.id} 
-                            onLongPress={() => requestPrivate(p.id)} 
+                            onLongPress={() => setSelectedOperatorId(p.id)} 
                             activeOpacity={0.8}
                             style={{ width: cardWidth, marginBottom: 10 }}
                         >
@@ -503,6 +550,30 @@ const App: React.FC = () => {
        renderDashboard()}
 
       {/* --- MODALES --- */}
+
+      {/* MODALE ACTIONS OPERATEUR (KICK/PRIVATE) */}
+      <Modal visible={!!selectedOperatorId} animationType="fade" transparent>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedOperatorId(null)}>
+           <View style={[styles.modalContent, { backgroundColor: '#18181b', borderColor: '#333', borderWidth: 1 }]}>
+               <Text style={[styles.modalTitle, {color: 'white'}]}>ACTION OPÉRATEUR</Text>
+               <Text style={{color: '#a1a1aa', marginBottom: 20}}>{peers[selectedOperatorId || '']?.callsign || 'Inconnu'}</Text>
+               
+               <TouchableOpacity onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} style={[styles.modalBtn, {backgroundColor: '#3b82f6', marginBottom: 10, width: '100%'}]}>
+                   <Text style={{color: 'white', fontWeight: 'bold'}}>APPEL PRIVÉ</Text>
+               </TouchableOpacity>
+               
+               {user.role === OperatorRole.HOST && (
+                   <TouchableOpacity onPress={() => selectedOperatorId && handleKickUser(selectedOperatorId)} style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 10, width: '100%'}]}>
+                        <Text style={{color: 'white', fontWeight: 'bold'}}>BANNIR / KICK</Text>
+                   </TouchableOpacity>
+               )}
+               
+               <TouchableOpacity onPress={() => setSelectedOperatorId(null)} style={{padding: 10}}>
+                   <Text style={{color: '#71717a'}}>ANNULER</Text>
+               </TouchableOpacity>
+           </View>
+        </TouchableOpacity>
+      </Modal>
       
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
