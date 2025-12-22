@@ -14,7 +14,6 @@ import * as Clipboard from 'expo-clipboard';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// AJOUT: Capteurs pour l'orientation
 import { Magnetometer } from 'expo-sensors';
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
@@ -39,7 +38,6 @@ const App: React.FC = () => {
   const [view, setView] = useState<ViewType>('login');
   const [peers, setPeers] = useState<Record<string, UserData>>({});
   const [pings, setPings] = useState<PingData[]>([]);
-  // AJOUT: Liste des bannis (Kick définitif)
   const [bannedPeers, setBannedPeers] = useState<string[]>([]);
   
   const [hostId, setHostId] = useState<string>('');
@@ -57,7 +55,6 @@ const App: React.FC = () => {
   const [showQRModal, setShowQRModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPingModal, setShowPingModal] = useState(false);
-  // AJOUT: Modale d'actions opérateur (remplace Alert système)
   const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(null);
   
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
@@ -66,46 +63,35 @@ const App: React.FC = () => {
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<Record<string, any>>({});
   const lastLocationRef = useRef<any>(null);
+  const migrationTimeoutRef = useRef<any>(null); // Timer pour éviter la migration instantanée (faux positif)
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // CHARGEMENT TRIGRAMME
   useEffect(() => {
     AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
       if (saved) setLoginInput(saved);
     });
   }, []);
 
-  // BATTERIE
   useEffect(() => {
     Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) })));
     const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) })));
     return () => sub && sub.remove();
   }, []);
 
-  // ORIENTATION MAGNÉTIQUE (Boussole réelle)
   useEffect(() => {
     Magnetometer.setUpdateInterval(100);
     const subscription = Magnetometer.addListener((data) => {
-      // Calcul de l'angle (0-360)
       let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); 
-      angle = angle - 90; // Correction repère
+      angle = angle - 90; 
       if (angle < 0) angle = 360 + angle;
-      
       setUser(prev => {
-          // On ne met à jour que si changement significatif pour éviter trop de re-renders
-          if (Math.abs(prev.head - angle) > 2) {
-              const u = { ...prev, head: Math.floor(angle) };
-              // Broadcast de l'orientation uniquement si on bouge pas trop (économie bande passante)
-              // Note: Idéalement on ne broadcast pas le heading à 10Hz, ici c'est local pour la fluidité
-              return u;
-          }
+          if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) };
           return prev;
       });
     });
     return () => subscription && subscription.remove();
   }, []);
 
-  // BACK BUTTON
   useEffect(() => {
     const backAction = () => {
       if (view === 'ops' || view === 'map') {
@@ -128,7 +114,7 @@ const App: React.FC = () => {
       if (peerRef.current) peerRef.current.destroy();
       setPeers({}); setPings([]); setHostId(''); setView('login');
       audioService.setTx(false); setVoxActive(false);
-      setBannedPeers([]); // Reset des bans à la déco
+      setBannedPeers([]);
   };
 
   const copyToClipboard = async () => { if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié"); } };
@@ -145,14 +131,20 @@ const App: React.FC = () => {
 
     switch (data.type) {
       case 'UPDATE': case 'FULL': case 'UPDATE_USER':
-        if (data.user) setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
+        // FIX DUPLICATION: On vérifie strictement que l'ID n'est pas le nôtre
+        if (data.user && data.user.id !== user.id) {
+             setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
+        }
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
         if (list.length > 0) {
             setPeers(prev => {
                 const next = { ...prev };
-                list.forEach((u: UserData) => { if(u.id !== user.id) next[u.id] = u; });
+                list.forEach((u: UserData) => { 
+                    // FIX DUPLICATION: Filtrage strict
+                    if(u.id && u.id !== user.id) next[u.id] = u; 
+                });
                 return next;
             });
         }
@@ -174,7 +166,6 @@ const App: React.FC = () => {
         showToast(data.state ? "SILENCE ACTIF" : "FIN SILENCE");
         break;
       case 'PRIVATE_REQ':
-        // Remplacé par une modale custom plus bas ou Alert native si nécessaire
         Alert.alert("Appel Privé", `Demande de ${data.from}`, [
             { text: "Refuser", style: "cancel" },
             { text: "Accepter", onPress: () => {
@@ -187,7 +178,6 @@ const App: React.FC = () => {
       case 'PRIVATE_ACK': enterPrivateMode(data.from); showToast("Canal Privé Établi"); break;
       case 'PRIVATE_END': leavePrivateMode(); showToast("Fin Canal Privé"); break;
       case 'KICK': 
-        // Destruction immédiate pour empêcher la reconnexion auto
         if (peerRef.current) peerRef.current.destroy(); 
         Alert.alert("Exclu", "Vous avez été exclu par l'Hôte."); 
         handleLogout(); 
@@ -207,20 +197,12 @@ const App: React.FC = () => {
       broadcast({ type: 'UPDATE', user: { ...user, status: OperatorStatus.CLEAR } });
   };
 
-  // KICK DÉFINITIF
   const handleKickUser = (targetId: string) => {
-      // 1. Envoyer le packet KICK
       const conn = connectionsRef.current[targetId];
       if (conn) conn.send({ type: 'KICK', from: user.id });
-      
-      // 2. Ajouter aux bannis
       setBannedPeers(prev => [...prev, targetId]);
-      
-      // 3. Fermer la connexion
       if (conn) conn.close();
       delete connectionsRef.current[targetId];
-
-      // 4. Update UI
       setPeers(prev => { const next = {...prev}; delete next[targetId]; return next; });
       setSelectedOperatorId(null);
       showToast("Utilisateur Banni");
@@ -233,9 +215,48 @@ const App: React.FC = () => {
       showToast("Demande envoyée");
   };
 
+  // --- LOGIQUE MIGRATION D'HÔTE ---
+  const handleHostDisconnect = () => {
+      if (user.role === OperatorRole.HOST) return; // Si je suis déjà chef, pas de migration
+      
+      showToast("CONNEXION PERDUE - MIGRATION...", "error");
+      
+      // 1. On liste tous les candidats (Soi-même + les pairs restants)
+      // L'ancien hôte est déjà déconnecté, donc pas dans 'peers' si on le nettoie, 
+      // mais par sécurité on filtre l'ancien hostId
+      const candidates = Object.values(peers)
+          .filter(p => p.id !== hostId && p.id !== user.id); // Les autres
+      candidates.push(user); // Moi
+
+      // 2. On trie par ancienneté (joinedAt)
+      candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+
+      const newHost = candidates[0];
+
+      if (newHost.id === user.id) {
+          // JE SUIS L'ÉLU
+          promoteToHost();
+      } else {
+          // JE SUIS TOUJOURS CLIENT, JE REJOINS L'ÉLU
+          // Délai aléatoire pour éviter DDOS sur le nouveau chef
+          setTimeout(() => {
+              connectToHost(newHost.id);
+          }, 500 + Math.random() * 1000);
+      }
+  };
+
+  const promoteToHost = () => {
+      setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
+      setHostId(user.id); // Je deviens la référence
+      showToast("JE SUIS LE NOUVEL HÔTE", "info");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // On garde les connexions entrantes qui pourraient arriver des autres
+  };
+
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
     const myId = initialRole === OperatorRole.HOST ? generateShortId() : undefined;
+    // CONFIG PEERJS (Récupère constants.ts)
     const p = new Peer(myId, CONFIG.PEER_CONFIG as any);
     peerRef.current = p;
 
@@ -250,23 +271,20 @@ const App: React.FC = () => {
     });
 
     p.on('connection', (conn) => {
-      // SÉCURITÉ : Vérifier si banni
       if (bannedPeers.includes(conn.peer)) {
-          console.log(`Rejet connexion bannie: ${conn.peer}`);
           conn.close();
           return;
       }
-
       connectionsRef.current[conn.peer] = conn;
       conn.on('data', (data: any) => handleData(data, conn.peer));
       conn.on('open', () => {
-        if (initialRole === OperatorRole.HOST) {
+        // Si je suis HOST (ou devenu HOST), je sync tout le monde
+        if (user.role === OperatorRole.HOST || initialRole === OperatorRole.HOST) {
           const list = Object.values(peers); list.push(user);
           conn.send({ type: 'SYNC', list: list, silence: silenceMode });
           pings.forEach(ping => conn.send({ type: 'PING', ping }));
         }
       });
-      // Nettoyage si connexion perdue
       conn.on('close', () => {
           setPeers(prev => { const next = {...prev}; delete next[conn.peer]; return next; });
       });
@@ -278,27 +296,48 @@ const App: React.FC = () => {
       call.on('stream', (rs) => audioService.playStream(rs));
     });
     
-    p.on('error', (err) => showToast(`Err: ${err.type}`, 'error'));
+    p.on('error', (err) => {
+        // Ignorer erreur fatale peerjs si déco
+        if (err.type === 'peer-unavailable') {
+             // C'est souvent ici qu'on détecte que l'hôte n'est plus là lors d'une tentative de connexion
+             // Mais pour une connexion active, c'est 'close' sur la conn qui prime.
+        }
+    });
   }, [peers, user, handleData, showToast, silenceMode, pings, bannedPeers]);
 
   const connectToHost = useCallback((targetId: string) => {
     if (!peerRef.current || !audioService.stream) return;
+    
+    // Nettoyage ancienne connexion host si existe
+    if (hostId && connectionsRef.current[hostId]) {
+        connectionsRef.current[hostId].close();
+    }
+
+    setHostId(targetId);
     const conn = peerRef.current.connect(targetId);
     connectionsRef.current[targetId] = conn;
     
     conn.on('open', () => {
-      showToast("CONNECTÉ");
+      showToast(`CONNECTÉ À ${targetId}`);
       conn.send({ type: 'FULL', user: user });
       const call = peerRef.current!.call(targetId, audioService.stream!);
       call.on('stream', (rs) => audioService.playStream(rs));
     });
+    
     conn.on('data', (data: any) => handleData(data, targetId));
+    
+    // DETECTION PERTE HÔTE
     conn.on('close', () => {
-        // Auto-reconnect supprimé ici pour respecter le Kick, ou gérer intelligemment
-        showToast("Déconnecté de l'hôte", "error");
-        setPeers({});
+        // Si la fermeture n'est pas volontaire (logout)
+        if (view === 'ops' || view === 'map') {
+            handleHostDisconnect();
+        }
     });
-  }, [user, handleData, showToast]);
+    
+    // Fallback erreur
+    conn.on('error', () => handleHostDisconnect());
+
+  }, [user, handleData, showToast, hostId, view]);
 
   const startServices = async () => {
     await audioService.init();
@@ -324,10 +363,7 @@ const App: React.FC = () => {
       (loc) => {
         const { latitude, longitude, speed, heading } = loc.coords;
         setUser(prev => {
-          // Si vitesse faible, on garde l'orientation magnétique (déjà dans prev.head grâce au Magnetometer)
-          // Si vitesse élevée (>3km/h), on peut utiliser le GPS heading pour corriger
           const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
-          
           const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
           
           if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
@@ -414,8 +450,9 @@ const App: React.FC = () => {
   );
 
   const renderDashboard = () => {
-    const activePeersCount = Object.keys(peers).length;
-    const totalOperators = 1 + activePeersCount;
+    // On filtre ici aussi pour l'affichage, double sécurité anti-doublon
+    const filteredPeers = Object.values(peers).filter(p => p.id !== user.id);
+    const totalOperators = 1 + filteredPeers.length;
     const cardWidth = totalOperators === 1 ? '100%' : '48%';
 
     return (
@@ -444,7 +481,7 @@ const App: React.FC = () => {
             {view === 'ops' ? (
                 <ScrollView contentContainerStyle={styles.grid}>
                     <OperatorCard user={user} isMe style={{ width: cardWidth }} />
-                    {Object.values(peers).map(p => (
+                    {filteredPeers.map(p => (
                         <TouchableOpacity 
                             key={p.id} 
                             onLongPress={() => setSelectedOperatorId(p.id)} 
@@ -549,9 +586,6 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      {/* --- MODALES --- */}
-
-      {/* MODALE ACTIONS OPERATEUR (KICK/PRIVATE) */}
       <Modal visible={!!selectedOperatorId} animationType="fade" transparent>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedOperatorId(null)}>
            <View style={[styles.modalContent, { backgroundColor: '#18181b', borderColor: '#333', borderWidth: 1 }]}>
