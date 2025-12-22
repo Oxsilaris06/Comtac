@@ -34,22 +34,18 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         #map { width: 100vw; height: 100vh; }
         .leaflet-control-attribution { display: none; }
         
-        /* MARKER UTILISATEUR */
-        .tac-wrapper { transition: transform 0.1s linear; } /* Transition rapide pour la boussole */
+        .tac-wrapper { transition: transform 0.1s linear; }
         .tac-arrow { width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-bottom: 24px solid #3b82f6; filter: drop-shadow(0 0 4px #3b82f6); }
         .tac-label { position: absolute; top: 28px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: white; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 10px; font-weight: bold; white-space: nowrap; border: 1px solid #3b82f6; }
         
-        /* STATUS COLORS */
         .status-CONTACT .tac-arrow { border-bottom-color: #ef4444; filter: drop-shadow(0 0 8px red); } .status-CONTACT .tac-label { border-color: #ef4444; color: #ef4444; }
         .status-CLEAR .tac-arrow { border-bottom-color: #22c55e; } .status-CLEAR .tac-label { border-color: #22c55e; color: #22c55e; }
         .status-APPUI .tac-arrow { border-bottom-color: #eab308; } .status-APPUI .tac-label { border-color: #eab308; color: #eab308; }
         .status-BUSY .tac-arrow { border-bottom-color: #a855f7; } .status-BUSY .tac-label { border-color: #a855f7; color: #a855f7; }
         
-        /* PINGS TRANSPARENTS */
         .ping-marker { text-align: center; color: rgba(239, 68, 68, 0.7); font-weight: bold; text-shadow: 0 0 5px black; }
         .ping-msg { background: rgba(239, 68, 68, 0.6); color: white; padding: 2px 4px; border-radius: 4px; font-size: 10px; backdrop-filter: blur(2px); }
 
-        /* BOUSSOLE */
         #compass {
             position: absolute; top: 20px; left: 20px; width: 50px; height: 50px; z-index: 9999;
             background: rgba(0,0,0,0.5); border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);
@@ -58,7 +54,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         #compass-arrow {
             width: 0; height: 0;
             border-left: 6px solid transparent; border-right: 6px solid transparent;
-            border-bottom: 16px solid #ef4444; /* NORD ROUGE */
+            border-bottom: 16px solid #ef4444;
             transform-origin: center bottom;
             position: relative; top: -8px;
         }
@@ -100,7 +96,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                 updateMarkers(data.me, data.peers, data.showTrails);
                 updatePings(data.pings, data.showPings, data.isHost, data.me.callsign);
                 
-                // Rotation Boussole (Inverse du heading utilisateur pour indiquer le Nord relatif)
                 if(data.me && data.me.head !== undefined) {
                     const rot = -data.me.head;
                     document.getElementById('compass-inner').style.transform = 'rotate(' + rot + 'deg)';
@@ -114,7 +109,10 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         }
 
         function updateMarkers(me, peers, showTrails) {
-            const all = [me, ...Object.values(peers)].filter(u => u && u.lat);
+            // FIX DOUBLON CARTE : On filtre ici aussi pour être sûr que 'peers' ne contient pas 'me'
+            const validPeers = Object.values(peers).filter(p => p.id !== me.id);
+            const all = [me, ...validPeers].filter(u => u && u.lat);
+            
             const activeIds = all.map(u => u.id);
             Object.keys(markers).forEach(id => { if(!activeIds.includes(id)) { map.removeLayer(markers[id]); delete markers[id]; } });
 
@@ -147,10 +145,9 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         }
 
         function updatePings(serverPings, showPings, isHost, myCallsign) {
-            // FIX: Réinitialiser proprement si on cache, mais permettre le redessin si showPings revient à true
             if (!showPings) { 
                 pingLayer.clearLayers(); 
-                pings = {}; // On vide le cache JS local pour forcer la reconstruction quand showPings=true
+                pings = {}; 
                 return; 
             }
             if (!map.hasLayer(pingLayer)) map.addLayer(pingLayer);
@@ -162,7 +159,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                 const canDrag = isHost || (p.sender === myCallsign);
                 if (pings[p.id]) {
                     pings[p.id].setLatLng([p.lat, p.lng]);
-                    // Update drag status if changed (rare but possible)
                     if(pings[p.id].dragging) { canDrag ? pings[p.id].dragging.enable() : pings[p.id].dragging.disable(); }
                 } else {
                     const icon = L.divIcon({ className: 'custom-div-icon', html: \`<div class="ping-marker"><div style="font-size:30px">📍</div><div class="ping-msg">\${p.sender}: \${p.msg}</div></div>\`, iconSize: [100, 60], iconAnchor: [50, 50] });
