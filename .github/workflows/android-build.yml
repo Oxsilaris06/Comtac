@@ -24,12 +24,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # RETOUR DE L'ACTION, MAIS SANS LE CACHE (Anti-Bug 400)
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: 8.6
-          cache-disabled: true 
+      # VERIFICATION (DEBUG)
+      - name: Check System Gradle Version
+        run: gradle -v
 
       - name: Installation des dépendances
         run: |
@@ -40,11 +37,11 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      - name: Build Android APK
+      - name: Build Android APK (System Gradle)
         run: |
           cd android
-          # IMPORTANT : On utilise 'gradle' (l'outil installé par l'action)
-          # au lieu de './gradlew' (le script qui essaie de télécharger et échoue)
+          # ON UTILISE 'gradle' (système) ET NON './gradlew' (téléchargement)
+          # Cela évite la connexion aux serveurs Gradle défaillants
           gradle assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
       - name: Télécharger l'APK
