@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import RNSoundLevel from 'react-native-sound-level';
 import MusicControl, { Command } from 'react-native-music-control';
 import { VolumeManager } from 'react-native-volume-manager';
-// AJOUT: Gestionnaire d'appel pour forcer le Haut-Parleur
+// AJOUT: Gestionnaire d'appel pour le Boost Audio
 import InCallManager from 'react-native-incall-manager';
 
 class AudioService {
@@ -27,19 +27,19 @@ class AudioService {
       this.stream = stream;
       this.setTx(false);
 
-      // --- CONFIGURATION AUDIO TACTIQUE (BOOST SON) ---
+      // --- CONFIGURATION AUDIO TACTIQUE (BOOST SONORE) ---
       try {
-          // 1. Démarrer en mode 'video' force l'utilisation du Haut-Parleur (plus fort que 'audio')
+          // 1. Démarrer en mode 'video' force l'utilisation du Haut-Parleur puissant
           InCallManager.start({ media: 'video' }); 
           
-          // 2. Forcer explicitement le Speakerphone
+          // 2. Forcer explicitement le Speakerphone (Boost)
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
           
-          // 3. Maximiser le volume système (Boost 100%)
+          // 3. Maximiser le volume système (100%)
           await VolumeManager.setVolume(1.0); 
           
-          // 4. Empêcher l'écran de s'éteindre (Optionnel, géré par keep-awake ailleurs)
+          // 4. Empêcher l'écran de s'éteindre lors d'un appel (Optionnel)
           InCallManager.setKeepScreenOn(true);
       } catch (e) { console.log("Audio Boost Error:", e); }
 
@@ -81,13 +81,13 @@ class AudioService {
               const currentVol = result.volume;
               const now = Date.now();
 
-              // Détection Hausse Volume
+              // Détection Hausse Volume (ou volume max maintenu)
               if (currentVol > this.lastVolume || (currentVol === 1 && this.lastVolume === 1)) {
                   // Si clic rapide (<600ms)
                   if (now - this.lastVolumeUpTime < 600) {
                       this.toggleVox(); 
                       this.lastVolumeUpTime = 0; // Reset
-                      // On remet le volume à fond après l'action
+                      // On remet le volume à fond après l'action pour garantir le boost
                       setTimeout(() => VolumeManager.setVolume(1.0), 100);
                   } else {
                       this.lastVolumeUpTime = now;
