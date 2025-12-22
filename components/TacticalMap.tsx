@@ -33,7 +33,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         body { margin: 0; padding: 0; background: #000; }
         #map { width: 100vw; height: 100vh; }
         .leaflet-control-attribution { display: none; }
-        
         .tac-wrapper { transition: transform 0.3s linear; }
         .tac-arrow { width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-bottom: 24px solid #3b82f6; filter: drop-shadow(0 0 4px #3b82f6); }
         .tac-label { position: absolute; top: 28px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: white; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 10px; font-weight: bold; white-space: nowrap; border: 1px solid #3b82f6; }
@@ -107,7 +106,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         }
 
         function updatePings(serverPings, showPings, isHost, myCallsign) {
-            // GESTION SHOW/HIDE
             if (!showPings) { pingLayer.clearLayers(); return; }
             if (!map.hasLayer(pingLayer)) map.addLayer(pingLayer);
 
@@ -115,26 +113,18 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
             Object.keys(pings).forEach(id => { if(!currentIds.includes(id)) { pingLayer.removeLayer(pings[id]); delete pings[id]; } });
 
             serverPings.forEach(p => {
-                // LOGIQUE DROIT DE DEPLACEMENT
                 const canDrag = isHost || (p.sender === myCallsign);
-                
                 if (pings[p.id]) {
                     pings[p.id].setLatLng([p.lat, p.lng]);
-                    // Leaflet hack pour changer draggable dynamiquement
-                    if (pings[p.id].dragging) { 
-                        canDrag ? pings[p.id].dragging.enable() : pings[p.id].dragging.disable(); 
-                    }
+                    if(pings[p.id].dragging) { canDrag ? pings[p.id].dragging.enable() : pings[p.id].dragging.disable(); }
                 } else {
                     const icon = L.divIcon({ className: 'custom-div-icon', html: \`<div class="ping-marker"><div style="font-size:30px">📍</div><div class="ping-msg">\${p.sender}: \${p.msg}</div></div>\`, iconSize: [100, 60], iconAnchor: [50, 50] });
-                    
                     const m = L.marker([p.lat, p.lng], { icon: icon, draggable: canDrag, zIndexOffset: 2000 });
-                    
                     m.on('dragend', (e) => {
                         const pos = e.target.getLatLng();
                         sendToApp({ type: 'PING_MOVE', id: p.id, lat: pos.lat, lng: pos.lng });
                     });
                     m.on('click', () => sendToApp({ type: 'PING_CLICK', id: p.id }));
-                    
                     pings[p.id] = m;
                     pingLayer.addLayer(m);
                 }
