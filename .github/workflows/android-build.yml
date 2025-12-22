@@ -15,7 +15,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: '' # Pas de cache pour éviter la corruption
+          cache: ''
 
       - name: Configuration de Java (JDK 17)
         uses: actions/setup-java@v4
@@ -26,7 +26,8 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: 8.6 # FIX: Retour version stable pour RN 0.74
+          # CHANGEMENT ICI : Passage à 8.8 pour contourner le cache corrompu de la 8.6
+          gradle-version: 8.8 
           cache-read-only: false
 
       - name: Installation des dépendances (Clean)
@@ -58,5 +59,5 @@ jobs:
       - name: Télécharger l'APK
         uses: actions/upload-artifact@v4
         with:
-          name: ComTac-v14-Debug-APK
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: comtac-v14-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
