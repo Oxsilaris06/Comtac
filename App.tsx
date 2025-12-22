@@ -20,7 +20,7 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 
-// NOUVEAU : Générateur d'ID compatible avec la version Web
+// GÉNÉRATEUR D'ID COURT (Compatible Web)
 const generateShortId = () => {
   return Math.random().toString(36).substring(2, 10).toUpperCase();
 };
@@ -49,13 +49,16 @@ const App: React.FC = () => {
   const [isPingMode, setIsPingMode] = useState(false);
   const [mapMode, setMapMode] = useState<'dark' | 'light' | 'satellite'>('dark');
   const [showTrails, setShowTrails] = useState(true);
-  const [showPings, setShowPings] = useState(true); // Gestion affichage Pings
+  const [showPings, setShowPings] = useState(true);
   const [voxActive, setVoxActive] = useState(false);
   
   const [showQRModal, setShowQRModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPingModal, setShowPingModal] = useState(false);
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
+
+  // Gestion Privée
+  const [privatePeerId, setPrivatePeerId] = useState<string | null>(null);
 
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<Record<string, any>>({});
@@ -93,50 +96,113 @@ const App: React.FC = () => {
 
   const broadcast = useCallback((data: any) => {
     if (!data.type && data.user) data = { type: 'UPDATE', user: data.user };
+    // PROTECTION ANTI-CLONE : On signe toujours le message
+    data.from = user.id; 
+    
     Object.values(connectionsRef.current).forEach((conn: any) => {
       if (conn.open) conn.send(data);
     });
-  }, []);
+  }, [user.id]);
 
+  // --- GESTION DES DONNÉES ENTRANTES ---
   const handleData = useCallback((data: any, fromId: string) => {
+    
+    // 🛡️ FIX CLONE CRITIQUE : Si le message vient de moi-même, JE L'IGNORE.
+    if (data.from === user.id) return;
+    if (data.user && data.user.id === user.id) return;
+
     switch (data.type) {
       case 'UPDATE': 
       case 'FULL':   
       case 'UPDATE_USER':
         if (data.user) setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
         break;
+        
       case 'SYNC': 
       case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
         if (list.length > 0) {
             const newPeers: Record<string, UserData> = {};
-            list.forEach((u: UserData) => { if(u.id !== user.id) newPeers[u.id] = u; });
+            list.forEach((u: UserData) => { 
+                // 🛡️ FIX CLONE SECONDAIRE : Je ne m'ajoute jamais depuis la liste d'un autre
+                if(u.id !== user.id) newPeers[u.id] = u; 
+            });
             setPeers(newPeers);
         }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
+        
       case 'PING':
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setPings(prev => [...prev, data.ping]);
         showToast(`PING: ${data.ping.msg}`);
         break;
+        
       case 'PING_MOVE': 
         setPings(prev => prev.map(p => p.id === data.id ? { ...p, lat: data.lat, lng: data.lng } : p));
         break;
+        
       case 'PING_DELETE': 
         setPings(prev => prev.filter(p => p.id !== data.id));
         break;
+        
       case 'SILENCE':
         setSilenceMode(data.state);
         showToast(data.state ? "SILENCE ACTIF" : "FIN SILENCE");
         break;
+
+      // --- LOGIQUE APPELS PRIVÉS ---
+      case 'PRIVATE_REQ':
+        Alert.alert(
+            "Appel Privé",
+            `Canal sécurisé demandé par ${data.from}`,
+            [
+                { text: "Refuser", style: "cancel" },
+                { text: "Accepter", onPress: () => {
+                    const conn = connectionsRef.current[data.from];
+                    if (conn) conn.send({ type: 'PRIVATE_ACK', from: user.id });
+                    enterPrivateMode(data.from);
+                }}
+            ]
+        );
+        break;
+
+      case 'PRIVATE_ACK':
+        enterPrivateMode(data.from);
+        showToast("Canal Privé Établi");
+        break;
+
+      case 'PRIVATE_END':
+        leavePrivateMode();
+        showToast("Fin Canal Privé");
+        break;
     }
   }, [user.id, showToast]);
+
+  const enterPrivateMode = (targetId: string) => {
+      setPrivatePeerId(targetId);
+      setUser(u => ({ ...u, status: OperatorStatus.BUSY }));
+      broadcast({ type: 'UPDATE', user: { ...user, status: OperatorStatus.BUSY } });
+  };
+
+  const leavePrivateMode = () => {
+      setPrivatePeerId(null);
+      setUser(u => ({ ...u, status: OperatorStatus.CLEAR }));
+      broadcast({ type: 'UPDATE', user: { ...user, status: OperatorStatus.CLEAR } });
+  };
+
+  const requestPrivate = (targetId: string) => {
+      const conn = connectionsRef.current[targetId];
+      if (conn) {
+          conn.send({ type: 'PRIVATE_REQ', from: user.id });
+          showToast("Invitation envoyée...");
+      }
+  };
 
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
     
-    // FIX COMPATIBILITÉ : Si je suis Host, je crée un ID court. Sinon je laisse PeerJS gérer.
+    // FIX ID : Si je suis Hôte, je génère un ID court lisible. Sinon PeerJS gère.
     const myId = initialRole === OperatorRole.HOST ? generateShortId() : undefined;
     
     const p = new Peer(myId, CONFIG.PEER_CONFIG as any);
@@ -157,9 +223,9 @@ const App: React.FC = () => {
       conn.on('data', (data: any) => handleData(data, conn.peer));
       conn.on('open', () => {
         if (initialRole === OperatorRole.HOST) {
+          // SYNC Initiale
           const list = Object.values(peers); list.push(user);
           conn.send({ type: 'SYNC', list: list, silence: silenceMode });
-          // Sync Pings aussi
           pings.forEach(ping => conn.send({ type: 'PING', ping }));
         }
       });
@@ -201,17 +267,21 @@ const App: React.FC = () => {
     await audioService.init();
     if (!permission?.granted) await requestPermission();
 
-    audioService.startMetering((level) => {
-      if (audioService.mode === 'vox' && !silenceMode) {
-        const shouldTx = level > CONFIG.VAD_THRESHOLD;
-        if (shouldTx !== audioService.isTx) {
-          audioService.setTx(shouldTx);
-          setUser(prev => {
-            const u = { ...prev, isTx: shouldTx };
+    // SYNCHRONISATION UI <-> SERVICE NATIF
+    // Le service audio natif envoie 1 (ON) ou 0 (OFF) selon le VOX ou le bouton Bluetooth
+    audioService.startMetering((state) => {
+      // state: 1 = En émission, 0 = Muet
+      const isTransmitting = state === 1;
+      
+      // Si l'état a changé (par exemple via bouton Bluetooth ou VOX natif)
+      if (isTransmitting !== user.isTx) {
+         if (silenceMode && user.role !== OperatorRole.HOST) return; // Bloquage silence
+
+         setUser(prev => {
+            const u = { ...prev, isTx: isTransmitting };
             broadcast({ type: 'UPDATE', user: u });
             return u;
-          });
-        }
+         });
       }
     });
 
@@ -326,21 +396,26 @@ const App: React.FC = () => {
             </View>
           </SafeAreaView>
           {silenceMode && (<View style={styles.silenceBanner}><Text style={styles.silenceText}>SILENCE RADIO</Text></View>)}
+          {privatePeerId && (<View style={[styles.silenceBanner, {backgroundColor: '#a855f7'}]}><Text style={styles.silenceText}>CANAL PRIVÉ ACTIF</Text></View>)}
       </View>
 
       <View style={styles.mainContent}>
         {view === 'ops' ? (
           <View style={styles.grid}>
              <OperatorCard user={user} isMe />
-             {Object.values(peers).map(p => <OperatorCard key={p.id} user={p} me={user} />)}
+             {/* APPUI LONG pour Appel Privé */}
+             {Object.values(peers).map(p => (
+                 <TouchableOpacity key={p.id} onLongPress={() => requestPrivate(p.id)} activeOpacity={0.8}>
+                    <OperatorCard user={p} me={user} />
+                 </TouchableOpacity>
+             ))}
           </View>
         ) : (
           <View style={{flex: 1}}>
             <TacticalMap 
               me={user} peers={peers} pings={pings} 
               mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
-              showPings={showPings} // Passage de la prop
-              isHost={user.role === OperatorRole.HOST} // Pour gérer les droits
+              showPings={showPings} isHost={user.role === OperatorRole.HOST}
               onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
               onPingMove={(p) => { 
                 setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
@@ -358,7 +433,6 @@ const App: React.FC = () => {
                 <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
                     <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
                 </TouchableOpacity>
-                {/* BOUTON TOGGLE PINGS (Masquable) */}
                 <TouchableOpacity onPress={() => setShowPings(!showPings)} style={styles.mapBtn}>
                     <MaterialIcons name={showPings ? 'location-on' : 'location-off'} size={24} color="#d4d4d8" />
                 </TouchableOpacity>
@@ -380,7 +454,13 @@ const App: React.FC = () => {
                    <Text style={[styles.statusBtnText, silenceMode ? {color:'white'} : {color: '#ef4444'}]}>SILENCE</Text>
                </TouchableOpacity>
             ) : null}
-            {[OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
+            {/* Bouton Quitter Privé */}
+            {privatePeerId && (
+                <TouchableOpacity onPress={() => { const conn = connectionsRef.current[privatePeerId]; if(conn) conn.send({type: 'PRIVATE_END'}); leavePrivateMode(); }} style={[styles.statusBtn, {borderColor: '#a855f7'}]}>
+                    <Text style={[styles.statusBtnText, {color: '#a855f7'}]}>QUITTER PRIVÉ</Text>
+                </TouchableOpacity>
+            )}
+            {!privatePeerId && [OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
                 <TouchableOpacity key={s} onPress={() => setStatus(s)} style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}>
                     <Text style={[styles.statusBtnText, user.status === s ? {color:'white'} : null]}>{s}</Text>
                 </TouchableOpacity>
