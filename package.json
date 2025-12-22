@@ -27,7 +27,6 @@
     "react-native-qrcode-svg": "^6.3.0",
     "react-native-svg": "15.2.0",
     "react-native-sound-level": "^1.2.0",
-    "react-native-music-control": "^1.4.1",
     "@config-plugins/react-native-webrtc": "^9.0.0",
     "@expo/vector-icons": "^14.0.0"
   },
