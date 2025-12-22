@@ -34,7 +34,8 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         #map { width: 100vw; height: 100vh; }
         .leaflet-control-attribution { display: none; }
         
-        .tac-wrapper { transition: transform 0.1s linear; }
+        /* FLECHE UTILISATEUR ROTATIVE */
+        .tac-wrapper { transition: transform 0.1s linear; } 
         .tac-arrow { width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-bottom: 24px solid #3b82f6; filter: drop-shadow(0 0 4px #3b82f6); }
         .tac-label { position: absolute; top: 28px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: white; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 10px; font-weight: bold; white-space: nowrap; border: 1px solid #3b82f6; }
         
@@ -46,6 +47,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         .ping-marker { text-align: center; color: rgba(239, 68, 68, 0.7); font-weight: bold; text-shadow: 0 0 5px black; }
         .ping-msg { background: rgba(239, 68, 68, 0.6); color: white; padding: 2px 4px; border-radius: 4px; font-size: 10px; backdrop-filter: blur(2px); }
 
+        /* BOUSSOLE */
         #compass {
             position: absolute; top: 20px; left: 20px; width: 50px; height: 50px; z-index: 9999;
             background: rgba(0,0,0,0.5); border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);
@@ -81,9 +83,24 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         let currentLayer = layers.dark; currentLayer.addTo(map);
 
         const markers = {};
-        const trails = {};
+        
+        // GESTION AVANCÉE DES TRACES MULTICOULEURS
+        // trails[id] = { segments: [ { line: L.polyline, status: string } ] }
+        const trails = {}; 
+        
         const pingLayer = L.layerGroup().addTo(map);
         let pings = {};
+
+        function getStatusColor(status) {
+             switch(status) {
+                 case 'CONTACT': return '#ef4444'; // Rouge
+                 case 'CLEAR': return '#22c55e';   // Vert
+                 case 'APPUI': return '#eab308';   // Jaune
+                 case 'BUSY': return '#a855f7';    // Violet
+                 case 'PROGRESSION': return '#3b82f6'; // Bleu
+                 default: return '#3b82f6';
+             }
+        }
 
         function sendToApp(data) { window.ReactNativeWebView.postMessage(JSON.stringify(data)); }
         
@@ -96,8 +113,9 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                 updateMarkers(data.me, data.peers, data.showTrails);
                 updatePings(data.pings, data.showPings, data.isHost, data.me.callsign);
                 
+                // Rotation Boussole (Inverse du heading + 180 pour corriger Nord/Sud)
                 if(data.me && data.me.head !== undefined) {
-                    const rot = -data.me.head;
+                    const rot = -data.me.head + 180;
                     document.getElementById('compass-inner').style.transform = 'rotate(' + rot + 'deg)';
                 }
             }
@@ -109,7 +127,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         }
 
         function updateMarkers(me, peers, showTrails) {
-            // FIX DOUBLON CARTE : On filtre ici aussi pour être sûr que 'peers' ne contient pas 'me'
             const validPeers = Object.values(peers).filter(p => p.id !== me.id);
             const all = [me, ...validPeers].filter(u => u && u.lat);
             
@@ -117,22 +134,62 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
             Object.keys(markers).forEach(id => { if(!activeIds.includes(id)) { map.removeLayer(markers[id]); delete markers[id]; } });
 
             all.forEach(u => {
+                // FLÈCHE ORIENTATION
                 const iconHtml = \`<div class="tac-wrapper status-\${u.status}" style="transform: rotate(\${u.head||0}deg);"><div class="tac-arrow"></div></div><div class="tac-label status-\${u.status}">\${u.callsign}</div>\`;
                 const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [40, 40], iconAnchor: [20, 20] });
-                if (markers[u.id]) { markers[u.id].setLatLng([u.lat, u.lng]); markers[u.id].setIcon(icon); } 
-                else { markers[u.id] = L.marker([u.lat, u.lng], {icon: icon, zIndexOffset: u.id === me.id ? 1000 : 500}).addTo(map); }
                 
-                if (!trails[u.id]) trails[u.id] = { pts: [], line: null };
-                const t = trails[u.id];
-                const last = t.pts[t.pts.length - 1];
-                if (!last || Math.abs(last[0]-u.lat) > 0.00005 || Math.abs(last[1]-u.lng) > 0.00005) {
-                    t.pts.push([u.lat, u.lng]); if(t.pts.length > 50) t.pts.shift();
-                    if (t.line) map.removeLayer(t.line);
-                    if (showTrails) {
-                        const col = u.status === 'CONTACT' ? '#ef4444' : (u.id === me.id ? '#3b82f6' : '#22c55e');
-                        t.line = L.polyline(t.pts, {color: col, weight: 2, dashArray: '4,4', opacity: 0.6}).addTo(map);
+                if (markers[u.id]) { 
+                    markers[u.id].setLatLng([u.lat, u.lng]); 
+                    markers[u.id].setIcon(icon); 
+                } else { 
+                    markers[u.id] = L.marker([u.lat, u.lng], {icon: icon, zIndexOffset: u.id === me.id ? 1000 : 500}).addTo(map); 
+                }
+                
+                // LOGIQUE TRACES MULTICOULEURS
+                if (!trails[u.id]) trails[u.id] = { segments: [] };
+                const userTrail = trails[u.id];
+                
+                // On récupère le dernier segment actif
+                let currentSegment = userTrail.segments.length > 0 ? userTrail.segments[userTrail.segments.length - 1] : null;
+                const lastPoint = currentSegment ? currentSegment.line.getLatLngs().slice(-1)[0] : null;
+
+                // On n'ajoute un point que si on a bougé un minimum (anti-doublon)
+                if (!lastPoint || Math.abs(lastPoint.lat - u.lat) > 0.00005 || Math.abs(lastPoint.lng - u.lng) > 0.00005) {
+                    
+                    // Si le statut a changé ou s'il n'y a pas de segment, on en crée un nouveau
+                    if (!currentSegment || currentSegment.status !== u.status) {
+                        const newColor = getStatusColor(u.status);
+                        // On connecte au point précédent pour éviter les trous
+                        const pts = lastPoint ? [lastPoint, [u.lat, u.lng]] : [[u.lat, u.lng]];
+                        
+                        const newLine = L.polyline(pts, {
+                            color: newColor, 
+                            weight: 2, 
+                            dashArray: '4,4', 
+                            opacity: 0.6
+                        });
+                        
+                        if(showTrails) newLine.addTo(map);
+                        
+                        userTrail.segments.push({ line: newLine, status: u.status });
+                        currentSegment = newLine; // Update ref
+                    } else {
+                        // Même statut : on étend la ligne existante
+                        currentSegment.line.addLatLng([u.lat, u.lng]);
+                    }
+                    
+                    // Nettoyage historique (max 50 segments)
+                    if (userTrail.segments.length > 50) {
+                        const removed = userTrail.segments.shift();
+                        map.removeLayer(removed.line);
                     }
                 }
+                
+                // GESTION VISIBILITÉ (Toggle)
+                userTrail.segments.forEach(seg => {
+                    if (showTrails && !map.hasLayer(seg.line)) map.addLayer(seg.line);
+                    if (!showTrails && map.hasLayer(seg.line)) map.removeLayer(seg.line);
+                });
             });
 
             if (me && me.lat) {
