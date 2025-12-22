@@ -20,6 +20,11 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 
+// NOUVEAU : Générateur d'ID compatible avec la version Web
+const generateShortId = () => {
+  return Math.random().toString(36).substring(2, 10).toUpperCase();
+};
+
 const App: React.FC = () => {
   useKeepAwake();
   const [permission, requestPermission] = useCameraPermissions();
@@ -44,6 +49,7 @@ const App: React.FC = () => {
   const [isPingMode, setIsPingMode] = useState(false);
   const [mapMode, setMapMode] = useState<'dark' | 'light' | 'satellite'>('dark');
   const [showTrails, setShowTrails] = useState(true);
+  const [showPings, setShowPings] = useState(true); // Gestion affichage Pings
   const [voxActive, setVoxActive] = useState(false);
   
   const [showQRModal, setShowQRModal] = useState(false);
@@ -85,11 +91,8 @@ const App: React.FC = () => {
     if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié !"); }
   };
 
-  // --- PROTOCOLE RÉSEAU (Compatible Web) ---
   const broadcast = useCallback((data: any) => {
-    // Si c'est une update user sans type, on force le type 'UPDATE'
     if (!data.type && data.user) data = { type: 'UPDATE', user: data.user };
-    
     Object.values(connectionsRef.current).forEach((conn: any) => {
       if (conn.open) conn.send(data);
     });
@@ -97,13 +100,11 @@ const App: React.FC = () => {
 
   const handleData = useCallback((data: any, fromId: string) => {
     switch (data.type) {
-      // Compatibilité Web & Mobile
       case 'UPDATE': 
-      case 'FULL':
+      case 'FULL':   
       case 'UPDATE_USER':
         if (data.user) setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
         break;
-        
       case 'SYNC': 
       case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
@@ -114,21 +115,17 @@ const App: React.FC = () => {
         }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
-        
       case 'PING':
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setPings(prev => [...prev, data.ping]);
         showToast(`PING: ${data.ping.msg}`);
         break;
-        
       case 'PING_MOVE': 
         setPings(prev => prev.map(p => p.id === data.id ? { ...p, lat: data.lat, lng: data.lng } : p));
         break;
-        
       case 'PING_DELETE': 
         setPings(prev => prev.filter(p => p.id !== data.id));
         break;
-        
       case 'SILENCE':
         setSilenceMode(data.state);
         showToast(data.state ? "SILENCE ACTIF" : "FIN SILENCE");
@@ -138,7 +135,11 @@ const App: React.FC = () => {
 
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
-    const p = new Peer(undefined, CONFIG.PEER_CONFIG as any);
+    
+    // FIX COMPATIBILITÉ : Si je suis Host, je crée un ID court. Sinon je laisse PeerJS gérer.
+    const myId = initialRole === OperatorRole.HOST ? generateShortId() : undefined;
+    
+    const p = new Peer(myId, CONFIG.PEER_CONFIG as any);
     peerRef.current = p;
 
     p.on('open', (pid) => {
@@ -156,9 +157,10 @@ const App: React.FC = () => {
       conn.on('data', (data: any) => handleData(data, conn.peer));
       conn.on('open', () => {
         if (initialRole === OperatorRole.HOST) {
-          // Format Web: SYNC + liste
           const list = Object.values(peers); list.push(user);
           conn.send({ type: 'SYNC', list: list, silence: silenceMode });
+          // Sync Pings aussi
+          pings.forEach(ping => conn.send({ type: 'PING', ping }));
         }
       });
     });
@@ -170,7 +172,7 @@ const App: React.FC = () => {
     });
     
     p.on('error', (err) => showToast(`Err: ${err.type}`, 'error'));
-  }, [peers, user, handleData, showToast, silenceMode]);
+  }, [peers, user, handleData, showToast, silenceMode, pings]);
 
   const connectToHost = useCallback((targetId: string) => {
     if (!peerRef.current || !audioService.stream) return;
@@ -179,7 +181,6 @@ const App: React.FC = () => {
     
     conn.on('open', () => {
       showToast("CONNECTÉ");
-      // Format Web: FULL
       conn.send({ type: 'FULL', user: user });
       const call = peerRef.current!.call(targetId, audioService.stream!);
       call.on('stream', (rs) => audioService.playStream(rs));
@@ -190,7 +191,7 @@ const App: React.FC = () => {
   const setStatus = (s: OperatorStatus) => {
     setUser(prev => {
       const u = { ...prev, status: s };
-      broadcast({ type: 'UPDATE', user: u }); // Format Web
+      broadcast({ type: 'UPDATE', user: u });
       return u;
     });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -224,11 +225,8 @@ const App: React.FC = () => {
         setUser(prev => {
           const newHead = (speed && speed > 0.5 && heading !== null) ? heading : prev.head;
           const newUser = { ...prev, lat: latitude, lng: longitude, head: newHead || prev.head };
-          
-          if (!lastLocationRef.current || 
-              Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || 
-              Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
-            broadcast({ type: 'UPDATE', user: newUser }); // Format Web
+          if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
+            broadcast({ type: 'UPDATE', user: newUser });
             lastLocationRef.current = { lat: latitude, lng: longitude };
           }
           return newUser;
@@ -261,7 +259,6 @@ const App: React.FC = () => {
     setTimeout(() => joinSession(data), 500);
   };
 
-  // --- UI RENDER ---
   const renderLogin = () => (
     <View style={styles.centerContainer}>
       <MaterialIcons name="fingerprint" size={80} color="#3b82f6" style={{opacity: 0.8, marginBottom: 30}} />
@@ -340,7 +337,10 @@ const App: React.FC = () => {
         ) : (
           <View style={{flex: 1}}>
             <TacticalMap 
-              me={user} peers={peers} pings={pings} mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
+              me={user} peers={peers} pings={pings} 
+              mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
+              showPings={showPings} // Passage de la prop
+              isHost={user.role === OperatorRole.HOST} // Pour gérer les droits
               onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
               onPingMove={(p) => { 
                 setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
@@ -357,6 +357,10 @@ const App: React.FC = () => {
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
                     <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
+                </TouchableOpacity>
+                {/* BOUTON TOGGLE PINGS (Masquable) */}
+                <TouchableOpacity onPress={() => setShowPings(!showPings)} style={styles.mapBtn}>
+                    <MaterialIcons name={showPings ? 'location-on' : 'location-off'} size={24} color="#d4d4d8" />
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setIsPingMode(!isPingMode)} style={[styles.mapBtn, isPingMode ? {backgroundColor: '#dc2626', borderColor: '#f87171'} : null]}>
                     <MaterialIcons name="ads-click" size={24} color="white" />
