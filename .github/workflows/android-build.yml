@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45 # Sécurité anti-blocage
+    timeout-minutes: 45
 
     steps:
       - name: Checkout du code
@@ -24,12 +24,8 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          # CHANGEMENT CRITIQUE : On force 8.7 pour contourner le bug de téléchargement de la 8.6
-          gradle-version: 8.7
-          cache-read-only: false
+      # SUPPRESSION DE L'ÉTAPE "Setup Gradle" QUI PLANTE
+      # On laisse le script ./gradlew gérer le téléchargement lui-même.
 
       - name: Installation des dépendances
         run: |
@@ -44,9 +40,8 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          # On nettoie d'abord pour être sûr
-          ./gradlew clean
-          # On lance le build avec une mémoire augmentée pour éviter les plantages
+          # Le flag --no-daemon est important ici pour la mémoire
+          # Le script va télécharger Gradle automatiquement lors de la première exécution
           ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
       - name: Télécharger l'APK
