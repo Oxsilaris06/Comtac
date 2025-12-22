@@ -85,50 +85,38 @@ const App: React.FC = () => {
     if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié !"); }
   };
 
-  // --- PROTOCOLE COMPATIBLE WEB (comtac.html) ---
   const broadcast = useCallback((data: any) => {
-    // Le web attend { type: 'UPDATE', user: ... }
     if (!data.type && data.user) data = { type: 'UPDATE', user: data.user };
-    
     Object.values(connectionsRef.current).forEach((conn: any) => {
       if (conn.open) conn.send(data);
     });
   }, []);
 
   const handleData = useCallback((data: any, fromId: string) => {
-    // TRADUCTION DES MESSAGES WEB <-> MOBILE
     switch (data.type) {
-      case 'UPDATE': // Format Web
-      case 'FULL':   // Format Web (Init)
-      case 'UPDATE_USER': // Ancien format Mobile (Compatibilité)
+      case 'UPDATE': 
+      case 'FULL':   
         if (data.user) setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
         break;
-        
-      case 'SYNC': // Format Web (avec .list)
-      case 'SYNC_PEERS': // Ancien format Mobile
-        const list = data.list || (data.peers ? Object.values(data.peers) : []);
-        if (list.length > 0) {
+      case 'SYNC': 
+        if (data.list) {
             const newPeers: Record<string, UserData> = {};
-            list.forEach((u: UserData) => { if(u.id !== user.id) newPeers[u.id] = u; });
+            data.list.forEach((u: UserData) => { if(u.id !== user.id) newPeers[u.id] = u; });
             setPeers(newPeers);
         }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
-        
       case 'PING':
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setPings(prev => [...prev, data.ping]);
         showToast(`PING: ${data.ping.msg}`);
         break;
-        
-      case 'PING_MOVE': // Format Web
+      case 'PING_MOVE': 
         setPings(prev => prev.map(p => p.id === data.id ? { ...p, lat: data.lat, lng: data.lng } : p));
         break;
-        
-      case 'PING_DELETE': // Format Web
+      case 'PING_DELETE': 
         setPings(prev => prev.filter(p => p.id !== data.id));
         break;
-        
       case 'SILENCE':
         setSilenceMode(data.state);
         showToast(data.state ? "SILENCE ACTIF" : "FIN SILENCE");
@@ -157,7 +145,6 @@ const App: React.FC = () => {
       conn.on('open', () => {
         if (initialRole === OperatorRole.HOST) {
           const list = Object.values(peers); list.push(user);
-          // Envoi au format Web (SYNC avec liste)
           conn.send({ type: 'SYNC', list: list, silence: silenceMode });
         }
       });
@@ -179,7 +166,6 @@ const App: React.FC = () => {
     
     conn.on('open', () => {
       showToast("CONNECTÉ");
-      // Envoi au format Web (FULL)
       conn.send({ type: 'FULL', user: user });
       const call = peerRef.current!.call(targetId, audioService.stream!);
       call.on('stream', (rs) => audioService.playStream(rs));
@@ -190,7 +176,7 @@ const App: React.FC = () => {
   const setStatus = (s: OperatorStatus) => {
     setUser(prev => {
       const u = { ...prev, status: s };
-      broadcast({ type: 'UPDATE', user: u }); // Format Web
+      broadcast({ type: 'UPDATE', user: u });
       return u;
     });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -207,7 +193,7 @@ const App: React.FC = () => {
           audioService.setTx(shouldTx);
           setUser(prev => {
             const u = { ...prev, isTx: shouldTx };
-            broadcast({ type: 'UPDATE', user: u }); // Format Web
+            broadcast({ type: 'UPDATE', user: u });
             return u;
           });
         }
@@ -224,11 +210,8 @@ const App: React.FC = () => {
         setUser(prev => {
           const newHead = (speed && speed > 0.5 && heading !== null) ? heading : prev.head;
           const newUser = { ...prev, lat: latitude, lng: longitude, head: newHead || prev.head };
-          
-          if (!lastLocationRef.current || 
-              Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || 
-              Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
-            broadcast({ type: 'UPDATE', user: newUser }); // Format Web
+          if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
+            broadcast({ type: 'UPDATE', user: newUser });
             lastLocationRef.current = { lat: latitude, lng: longitude };
           }
           return newUser;
