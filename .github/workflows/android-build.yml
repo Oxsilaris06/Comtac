@@ -15,7 +15,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: '' # FIX: Désactivation du cache Node pour éviter les erreurs serveur GitHub
 
       - name: Configuration de Java (JDK 17)
         uses: actions/setup-java@v4
@@ -27,19 +26,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.8
-          cache-read-only: false # On tente de ne pas bloquer sur le cache
 
-      - name: Installation des dépendances (Clean)
+      - name: Installation des dépendances
         run: |
-          npm cache clean --force
-          rm -rf node_modules
           npm install --legacy-peer-deps
           npx expo install --fix
 
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      # Cette étape est cruciale pour éviter l'écran blanc
       - name: Force Bundle JS
         run: |
           mkdir -p android/app/src/main/assets
@@ -51,11 +46,11 @@ jobs:
             --assets-dest android/app/src/main/res
 
       - name: Build Android APK
-        # FIX MÉMOIRE MAXIMALE
+        # FIX : Suppression de --offline. Internet est requis pour télécharger les plugins !
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon --offline
+          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
       - name: Télécharger l'APK
         uses: actions/upload-artifact@v4
