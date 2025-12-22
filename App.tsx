@@ -433,7 +433,18 @@ const App: React.FC = () => {
                 </TouchableOpacity>
             )}
             {!privatePeerId && [OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
-                <TouchableOpacity key={s} onPress={() => setStatus(s)} style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}>
+                <TouchableOpacity 
+                    key={s} 
+                    onPress={() => {
+                        // FIX: Mise à jour directe de l'état local et broadcast (plus de setStatus crash)
+                        setUser(prev => {
+                            const updated = { ...prev, status: s };
+                            broadcast({ type: 'UPDATE', user: updated });
+                            return updated;
+                        });
+                    }}
+                    style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}
+                >
                     <Text style={[styles.statusBtnText, user.status === s ? {color:'white'} : null]}>{s}</Text>
                 </TouchableOpacity>
             ))}
@@ -462,10 +473,14 @@ const App: React.FC = () => {
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
       
+      {/* Gestion de l'affichage principal */}
       {view === 'login' ? renderLogin() :
        view === 'menu' ? renderMenu() :
        renderDashboard()}
+
+      {/* --- MODALES --- */}
       
+      {/* Modale QR Code */}
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -481,6 +496,7 @@ const App: React.FC = () => {
         </View>
       </Modal>
 
+      {/* Modale Scanner Camera */}
       <Modal visible={showScanner} animationType="slide">
         <View style={{flex: 1, backgroundColor: 'black'}}>
           <CameraView 
@@ -499,6 +515,7 @@ const App: React.FC = () => {
         </View>
       </Modal>
 
+      {/* Modale Envoi Ping */}
       <Modal visible={showPingModal} animationType="fade" transparent>
          <View style={styles.modalOverlay}>
             <View style={[styles.modalContent, {backgroundColor: '#18181b', borderWidth: 1, borderColor: '#333'}]}>
@@ -535,6 +552,7 @@ const App: React.FC = () => {
          </View>
       </Modal>
 
+      {/* Toast Notification */}
       {toast && (
         <View style={[styles.toast, toast.type === 'error' && {backgroundColor: '#ef4444'}]}>
            <Text style={styles.toastText}>{toast.msg}</Text>
