@@ -6,6 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # Sécurité anti-blocage
 
     steps:
       - name: Checkout du code
@@ -26,11 +27,11 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          # CHANGEMENT ICI : Passage à 8.8 pour contourner le cache corrompu de la 8.6
-          gradle-version: 8.8 
+          # CHANGEMENT CRITIQUE : On force 8.7 pour contourner le bug de téléchargement de la 8.6
+          gradle-version: 8.7
           cache-read-only: false
 
-      - name: Installation des dépendances (Clean)
+      - name: Installation des dépendances
         run: |
           npm cache clean --force
           npm install --legacy-peer-deps
@@ -39,21 +40,13 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      - name: Force Bundle JS
-        run: |
-          mkdir -p android/app/src/main/assets
-          npx react-native bundle \
-            --platform android \
-            --dev false \
-            --entry-file index.tsx \
-            --bundle-output android/app/src/main/assets/index.android.bundle \
-            --assets-dest android/app/src/main/res
-
       - name: Build Android APK
-        # Mémoire Max + Online
         run: |
           cd android
           chmod +x gradlew
+          # On nettoie d'abord pour être sûr
+          ./gradlew clean
+          # On lance le build avec une mémoire augmentée pour éviter les plantages
           ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
       - name: Télécharger l'APK
