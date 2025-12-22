@@ -34,6 +34,8 @@ module.exports = function(config) {
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
+        // AJOUT OBLIGATOIRE ANDROID 14 :
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.WAKE_LOCK",
         "android.permission.BATTERY_STATS",
         "android.permission.BLUETOOTH",
@@ -64,7 +66,9 @@ function withMusicControlFix(config) {
       mainApplication['service'].push({
         $: { 
             'android:name': serviceName,
-            'android:exported': 'true' // CRITIQUE POUR ANDROID 12+
+            'android:exported': 'true',
+            // AJOUT CRITIQUE POUR SDK 34 (Android 14) :
+            'android:foregroundServiceType': 'mediaPlayback' 
         }
       });
     }
