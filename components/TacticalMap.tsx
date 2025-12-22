@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useRef } from 'react';
-// CORRECTION ICI : Ajout de "Text" dans les imports
 import { StyleSheet, View, Text, Platform } from 'react-native';
 import MapView, { UrlTile, Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -17,7 +16,7 @@ const COLORS = {
   [OperatorStatus.PROGRESSION]: '#3b82f6',
 };
 
-// SÉCURITÉ : Ignore 0, null, undefined
+// SÉCURITÉ : Rejet strict des coordonnées invalides (Null Island)
 const isValidCoord = (val: any): boolean => {
   return typeof val === 'number' && !isNaN(val) && val !== null && Math.abs(val) > 0.0001;
 };
@@ -46,6 +45,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
   if (mapMode === 'light') currentTileUrl = TILE_URL_LIGHT;
   if (mapMode === 'satellite') currentTileUrl = TILE_URL_SAT;
 
+  // 1. Centrage automatique (Une seule fois au démarrage valide)
   useEffect(() => {
     if (!hasCentered && me && isValidCoord(me.lat) && isValidCoord(me.lng) && mapRef.current) {
         mapRef.current.animateToRegion({
@@ -56,6 +56,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
     }
   }, [me?.lat, me?.lng, hasCentered]);
 
+  // 2. Gestion des Tracés
   useEffect(() => {
     if (!showTrails) return;
     setTrails(prev => {
@@ -68,6 +69,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         const history = next[id];
         const last = history[history.length - 1];
 
+        // Filtre de mouvement (5 mètres min)
         if (!last || (Math.abs(last.latitude - lat!) > 0.00005 || Math.abs(last.longitude - lng!) > 0.00005)) {
           history.push({ latitude: lat!, longitude: lng! });
           if (history.length > 50) history.shift();
@@ -87,11 +89,13 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
   const renderMarker = (u: UserData, isMe: boolean) => {
     if (!u || !isValidCoord(u.lat) || !isValidCoord(u.lng)) return null;
     const color = COLORS[u.status] || COLORS.CLEAR;
+    
     return (
       <Marker
         key={u.id}
         coordinate={{ latitude: u.lat, longitude: u.lng }}
-        anchor={{ x: 0.5, y: 0.5 }} flat={true} rotation={u.head || 0} zIndex={isMe ? 100 : 50}
+        anchor={{ x: 0.5, y: 0.5 }} flat={true} rotation={u.head || 0} 
+        zIndex={isMe ? 150 : 50} // Z-index élevé
       >
         <View style={styles.markerContainer}>
           <View style={[styles.labelBadge, { borderColor: color }]}>
@@ -109,18 +113,26 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_DEFAULT}
-        mapType={Platform.OS === 'android' ? "none" : "standard"}
-        rotateEnabled={true} showsUserLocation={false}
+        mapType={Platform.OS === 'android' ? "none" : "standard"} // "none" cache le fond Google
+        rotateEnabled={true}
+        showsUserLocation={false}
+        // Callbacks protégés
         onPress={(e) => { if(pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
         onLongPress={(e) => { if(!pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
         initialRegion={{
-            latitude: 48.8566, longitude: 2.3522, latitudeDelta: 0.05, longitudeDelta: 0.05,
+            latitude: 48.8566, longitude: 2.3522, // Paris (Défaut)
+            latitudeDelta: 0.05, longitudeDelta: 0.05,
         }}
       >
+        {/* L'ARME SECRÈTE : shouldReplaceMapContent={true} */}
         <UrlTile
           key={mapMode}
           urlTemplate={currentTileUrl}
-          maximumZ={19} flipY={false} zIndex={10} 
+          maximumZ={19}
+          flipY={false}
+          zIndex={100} // Z-Index très élevé pour passer devant le fond noir
+          tileSize={256}
+          shouldReplaceMapContent={true} 
         />
 
         {showTrails && Object.entries(trails).map(([id, coords]) => {
@@ -130,8 +142,12 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
            if (coords.length < 2) return null;
            return (
              <Polyline
-               key={`trail-${id}`} coordinates={coords} strokeColor={color} strokeWidth={isMe ? 3 : 2}
-               lineDashPattern={isMe ? [0] : [5, 5]} zIndex={15}
+               key={`trail-${id}`}
+               coordinates={coords}
+               strokeColor={color}
+               strokeWidth={isMe ? 3 : 2}
+               lineDashPattern={isMe ? [0] : [5, 5]}
+               zIndex={110}
              />
            );
         })}
