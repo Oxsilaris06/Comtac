@@ -24,9 +24,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # SUPPRESSION DE L'ÉTAPE "Setup Gradle" QUI PLANTE
-      # On laisse le script ./gradlew gérer le téléchargement lui-même.
-
       - name: Installation des dépendances
         run: |
           npm cache clean --force
@@ -36,12 +33,19 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
+      # --- CORRECTIF RÉSEAU GRADLE ---
+      # On force la version 8.6 au lieu de la 8.8 qui renvoie une erreur 503
+      - name: Fix Gradle Version (Downgrade to 8.6)
+        run: |
+          cd android/gradle/wrapper
+          sed -i 's/gradle-8.8-all.zip/gradle-8.6-all.zip/g' gradle-wrapper.properties
+          cat gradle-wrapper.properties # Vérification visuelle dans les logs
+
       - name: Build Android APK
         run: |
           cd android
           chmod +x gradlew
-          # Le flag --no-daemon est important ici pour la mémoire
-          # Le script va télécharger Gradle automatiquement lors de la première exécution
+          # Le téléchargement se fera maintenant sur la version 8.6
           ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
       - name: Télécharger l'APK
