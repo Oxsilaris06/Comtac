@@ -50,19 +50,22 @@ module.exports = function(config) {
   });
 };
 
-// --- PLUGIN CUSTOM : Réparation MusicControl (Anti-White Screen) ---
+// --- PLUGIN REPARATION CRASH ANDROID ---
 function withMusicControlFix(config) {
   return withAndroidManifest(config, async (config) => {
     const androidManifest = config.modResults;
     const mainApplication = androidManifest.manifest.application[0];
 
-    // On ajoute le service manquant qui cause le crash
     mainApplication['service'] = mainApplication['service'] || [];
     const serviceName = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotification';
     
+    // On s'assure que le service n'est pas déjà là pour éviter les doublons
     if (!mainApplication['service'].some(s => s.$['android:name'] === serviceName)) {
       mainApplication['service'].push({
-        $: { 'android:name': serviceName }
+        $: { 
+            'android:name': serviceName,
+            'android:exported': 'true' // CRITIQUE POUR ANDROID 12+
+        }
       });
     }
     return config;
