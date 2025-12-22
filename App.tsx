@@ -457,6 +457,91 @@ const App: React.FC = () => {
       </View>
     </View>
   );
+
+  return (
+    <View style={styles.container}>
+      <StatusBar style="light" backgroundColor="#000" />
+      
+      {view === 'login' ? renderLogin() :
+       view === 'menu' ? renderMenu() :
+       renderDashboard()}
+      
+      <Modal visible={showQRModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>MON IDENTITY TAG</Text>
+            <QRCode value={user.id || 'NO_ID'} size={200} />
+            <TouchableOpacity onPress={copyToClipboard}>
+                <Text style={styles.qrId}>{user.id}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowQRModal(false)} style={styles.closeBtn}>
+              <Text style={styles.closeBtnText}>FERMER</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showScanner} animationType="slide">
+        <View style={{flex: 1, backgroundColor: 'black'}}>
+          <CameraView 
+            style={{flex: 1}} 
+            onBarcodeScanned={handleScannerBarCodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: ["qr"],
+            }}
+          />
+          <TouchableOpacity onPress={() => setShowScanner(false)} style={styles.scannerClose}>
+            <MaterialIcons name="close" size={30} color="white" />
+          </TouchableOpacity>
+          <View style={{position: 'absolute', bottom: 50, alignSelf: 'center'}}>
+             <Text style={{color: 'white', backgroundColor: 'rgba(0,0,0,0.5)', padding: 10}}>Scannez le QR Code de l'Hôte</Text>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showPingModal} animationType="fade" transparent>
+         <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, {backgroundColor: '#18181b', borderWidth: 1, borderColor: '#333'}]}>
+               <Text style={[styles.modalTitle, {color: 'white'}]}>ENVOYER PING</Text>
+               <TextInput 
+                  style={styles.pingInput} 
+                  placeholder="Message (ex: ENNEMI)" 
+                  placeholderTextColor="#71717a"
+                  onChangeText={setPingMsgInput}
+                  autoFocus
+               />
+               <View style={{flexDirection: 'row', gap: 10}}>
+                   <TouchableOpacity onPress={() => setShowPingModal(false)} style={[styles.modalBtn, {backgroundColor: '#27272a'}]}>
+                       <Text style={{color: 'white', fontWeight: 'bold'}}>ANNULER</Text>
+                   </TouchableOpacity>
+                   <TouchableOpacity onPress={() => {
+                       if(tempPingLoc && pingMsgInput) {
+                           const newPing: PingData = {
+                               id: Math.random().toString(36).substr(2, 9),
+                               lat: tempPingLoc.lat, lng: tempPingLoc.lng,
+                               msg: pingMsgInput, sender: user.callsign, timestamp: Date.now()
+                           };
+                           setPings(prev => [...prev, newPing]);
+                           broadcast({ type: 'PING', ping: newPing });
+                           setShowPingModal(false);
+                           setPingMsgInput('');
+                           setIsPingMode(false);
+                       }
+                   }} style={[styles.modalBtn, {backgroundColor: '#ef4444'}]}>
+                       <Text style={{color: 'white', fontWeight: 'bold'}}>ENVOYER</Text>
+                   </TouchableOpacity>
+               </View>
+            </View>
+         </View>
+      </Modal>
+
+      {toast && (
+        <View style={[styles.toast, toast.type === 'error' && {backgroundColor: '#ef4444'}]}>
+           <Text style={styles.toastText}>{toast.msg}</Text>
+        </View>
+      )}
+    </View>
+  );
 };
 
 const styles = StyleSheet.create({
