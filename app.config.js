@@ -49,12 +49,13 @@ module.exports = function(config) {
         { 
           android: { 
             minSdkVersion: 24, 
-            compileSdkVersion: 34, 
-            targetSdkVersion: 34, 
-            buildToolsVersion: "34.0.0" 
+            // DOWNGRADE SDK 33 POUR EVITER LE CRASH "RECEIVER_EXPORTED"
+            compileSdkVersion: 33, 
+            targetSdkVersion: 33, 
+            buildToolsVersion: "33.0.0" 
           },
-          // CORRECTION DU BUG DE BUILD IOS (PODFILE)
           ios: {
+            // Requis par react-native-volume-manager
             deploymentTarget: "13.4"
           }
         }
@@ -64,6 +65,7 @@ module.exports = function(config) {
   });
 };
 
+// Plugin conservé (ne fait pas de mal sur SDK 33 et prépare l'avenir)
 function withMusicControlFix(config) {
   return withAndroidManifest(config, async (config) => {
     const androidManifest = config.modResults;
