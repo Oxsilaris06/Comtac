@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 import RNSoundLevel from 'react-native-sound-level';
 import MusicControl, { Command } from 'react-native-music-control';
 import { VolumeManager } from 'react-native-volume-manager';
+// AJOUT: Gestionnaire d'appel pour forcer le Haut-Parleur
+import InCallManager from 'react-native-incall-manager';
 
 class AudioService {
   stream: MediaStream | null = null;
@@ -10,15 +12,12 @@ class AudioService {
   isTx: boolean = false;
   mode: 'ptt' | 'vox' = 'ptt';
   
-  // VOX Settings
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
 
-  // Notification Data
+  // Notification & Volume
   currentRoomId: string = 'Déconnecté';
-
-  // Volume Trigger Data
   lastVolume: number = 0;
   lastVolumeUpTime: number = 0;
 
@@ -28,22 +27,40 @@ class AudioService {
       this.stream = stream;
       this.setTx(false);
 
-      // --- CONFIGURATION NOTIFICATION PERMANENTE ---
+      // --- CONFIGURATION AUDIO TACTIQUE (BOOST SON) ---
+      try {
+          // 1. Démarrer en mode 'video' force l'utilisation du Haut-Parleur (plus fort que 'audio')
+          InCallManager.start({ media: 'video' }); 
+          
+          // 2. Forcer explicitement le Speakerphone
+          InCallManager.setForceSpeakerphoneOn(true);
+          InCallManager.setSpeakerphoneOn(true);
+          
+          // 3. Maximiser le volume système (Boost 100%)
+          await VolumeManager.setVolume(1.0); 
+          
+          // 4. Empêcher l'écran de s'éteindre (Optionnel, géré par keep-awake ailleurs)
+          InCallManager.setKeepScreenOn(true);
+      } catch (e) { console.log("Audio Boost Error:", e); }
+
+      // --- SETUP NOTIFICATION PERMANENTE ---
       try {
           if (Platform.OS === 'android') {
              MusicControl.enableBackgroundMode(true);
-             this.updateNotification('En attente...'); // État initial
+             this.updateNotification('En attente...');
              
-             // Setup boutons notification (optionnel mais recommandé)
              MusicControl.enableControl('play', true);
              MusicControl.enableControl('pause', true);
+             // On supprime 'stop' pour éviter que l'OS ne tue le service
+             MusicControl.enableControl('stop', false); 
+
              const toggle = () => { this.toggleVox(); }; 
              MusicControl.on(Command.play, toggle);
              MusicControl.on(Command.pause, toggle);
           }
       } catch (e) { }
 
-      // --- SETUP VOX (Détection Voix) ---
+      // --- SETUP VOX (VAD) ---
       try {
           RNSoundLevel.start();
           RNSoundLevel.onNewFrame = (data: any) => {
@@ -55,9 +72,8 @@ class AudioService {
           };
       } catch (e) { }
 
-      // --- SETUP DOUBLE CLIC VOLUME (Trigger Hardware) ---
+      // --- SETUP TRIGGER VOLUME (DOUBLE CLICK) ---
       try {
-          // On récupère le volume initial
           const vol = await VolumeManager.getVolume();
           this.lastVolume = typeof vol === 'number' ? vol : 0.5;
 
@@ -65,19 +81,21 @@ class AudioService {
               const currentVol = result.volume;
               const now = Date.now();
 
-              // Si le volume augmente
-              if (currentVol > this.lastVolume) {
-                  // Si le dernier "Volume Up" était il y a moins de 600ms
+              // Détection Hausse Volume
+              if (currentVol > this.lastVolume || (currentVol === 1 && this.lastVolume === 1)) {
+                  // Si clic rapide (<600ms)
                   if (now - this.lastVolumeUpTime < 600) {
-                      this.toggleVox(); // ACTION !
-                      this.lastVolumeUpTime = 0; // Reset pour éviter triple clic
+                      this.toggleVox(); 
+                      this.lastVolumeUpTime = 0; // Reset
+                      // On remet le volume à fond après l'action
+                      setTimeout(() => VolumeManager.setVolume(1.0), 100);
                   } else {
                       this.lastVolumeUpTime = now;
                   }
               }
               this.lastVolume = currentVol;
           });
-      } catch (e) { console.log("Volume Listener Error", e); }
+      } catch (e) { }
 
       return true;
     } catch (err) {
@@ -86,21 +104,21 @@ class AudioService {
     }
   }
 
-  // --- MISE A JOUR NOTIFICATION ---
   updateNotification(roomId?: string) {
       if (roomId) this.currentRoomId = roomId;
       
       const voxStateText = this.mode === 'vox' ? 'VOX ACTIF' : 'PTT (Manuel)';
-      
+      const color = this.mode === 'vox' ? 0xFFef4444 : 0xFF3b82f6;
+
       MusicControl.setNowPlaying({
           title: `Salon #${this.currentRoomId}`,
-          artist: `ComTac en ligne (${voxStateText})`,
+          artist: `ComTac : ${voxStateText}`,
           album: 'Réseau Tactique',
           duration: 0, 
-          color: this.mode === 'vox' ? 0xFFef4444 : 0xFF3b82f6, // Rouge si VOX, Bleu sinon
+          color: color,
           isPlaying: this.mode === 'vox', 
           isSeekable: false,
-          notificationIcon: 'icon' // Utilise l'icône de l'app par défaut
+          notificationIcon: 'icon' 
       });
   }
 
@@ -124,19 +142,16 @@ class AudioService {
   }
 
   toggleVox() {
-    // 1. Changement de mode
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // 2. Gestion Micro : Si on passe en PTT, on COUPE immédiatement (Demandé)
+    // Si on passe en PTT, on COUPE le micro immédiatement
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
 
-    // 3. Mise à jour Notification pour refléter l'état
     this.updateNotification();
-    
-    return this.mode === 'vox'; // Retourne l'état pour l'UI
+    return this.mode === 'vox';
   }
 
   startMetering(callback: (level: number) => void) {
