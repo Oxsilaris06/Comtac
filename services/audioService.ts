@@ -1,70 +1,113 @@
-import { Platform } from 'react-native';
-// On importe directement le module natif.
-// Si TypeScript souligne en rouge, ce n'est pas grave, le build Android passera.
-import { mediaDevices, MediaStream } from 'react-native-webrtc'; 
+import { mediaDevices, MediaStream } from 'react-native-webrtc';
+
+// Chargement sécurisé des modules natifs
+let RNSoundLevel: any;
+let MusicControl: any, Command: any;
+try {
+  RNSoundLevel = require('react-native-sound-level').default;
+  const MCModule = require('react-native-music-control');
+  MusicControl = MCModule.default;
+  Command = MCModule.Command;
+} catch (e) { console.log("Audio Natif non disponible (mode WebRTC pur)"); }
 
 class AudioService {
-  public stream: MediaStream | null = null;
-  public mode: 'ptt' | 'vox' = 'ptt';
-  public isTx = false;
+  stream: MediaStream | null = null;
+  isTx: boolean = false;
+  mode: 'ptt' | 'vox' = 'ptt';
+  
+  // Paramètres VOX
+  voxThreshold: number = -35; 
+  voxHoldTime: number = 1000; 
+  voxTimer: any = null;
 
-  async init() {
+  async init(): Promise<boolean> {
     try {
-      const constraints = {
-        audio: true, // Simplifié pour la compatibilité maximale
-        video: false
-      };
-
-      // Cast explicite pour éviter les erreurs de typage TS strict
-      this.stream = await mediaDevices.getUserMedia(constraints) as MediaStream;
-      
-      // Mute initial (Mode écoute seule par défaut)
+      const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
+      this.stream = stream;
       this.setTx(false);
-      
+
+      // --- 1. CONFIGURATION BLUETOOTH (Casques Tactiques) ---
+      if (MusicControl) {
+        MusicControl.enableBackgroundMode(true);
+        MusicControl.setNowPlaying({
+          title: 'COM TAC',
+          artist: 'Canal Actif',
+          album: 'Tactical',
+          duration: 0, 
+          color: 0xFF3b82f6,
+          notificationIcon: 'play' // Assurez-vous d'avoir une icône ou laissez par défaut
+        });
+        
+        // Active tous les contrôles possibles pour intercepter le bouton du casque
+        MusicControl.enableControl('play', true);
+        MusicControl.enableControl('pause', true);
+        MusicControl.enableControl('stop', false);
+        MusicControl.enableControl('togglePlayPause', true);
+
+        const toggleHandler = () => {
+            this.setTx(!this.isTx); 
+            // Feedback visuel sur le lecteur du téléphone
+            MusicControl.updatePlayback({
+                state: !this.isTx ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED,
+                elapsedTime: 0
+            });
+        };
+
+        MusicControl.on(Command.play, toggleHandler);
+        MusicControl.on(Command.pause, toggleHandler);
+        MusicControl.on(Command.togglePlayPause, toggleHandler);
+      }
+
+      // --- 2. CONFIGURATION VOX (Natif) ---
+      if (RNSoundLevel) {
+        try {
+            RNSoundLevel.start();
+            RNSoundLevel.onNewFrame = (data: any) => {
+                // data.value est en décibels (ex: -160 à 0)
+                if (this.mode === 'vox' && data.value > this.voxThreshold) {
+                    if (!this.isTx) this.setTx(true);
+                    
+                    if (this.voxTimer) clearTimeout(this.voxTimer);
+                    this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
+                }
+            };
+        } catch(e) { console.warn("Erreur démarrage RNSoundLevel", e); }
+      }
+
       return true;
-    } catch (e) {
-      console.error("AudioService: Échec init micro:", e);
+    } catch (err) {
+      console.error("[Audio] Init Error:", err);
       return false;
     }
   }
 
-  setTx(active: boolean) {
-    this.isTx = active;
+  setTx(state: boolean) {
+    if (this.isTx === state) return;
+    this.isTx = state;
+    
+    // Mute hardware réel via WebRTC
     if (this.stream) {
-      // En WebRTC natif, activer/désactiver la piste coupe réellement l'envoi de paquets
-      this.stream.getAudioTracks().forEach((track: any) => {
-        track.enabled = active;
-      });
+      this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
   }
 
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
-    return this.mode;
+    if (this.mode === 'ptt') {
+        this.setTx(false);
+        if (this.voxTimer) clearTimeout(this.voxTimer);
+    }
   }
 
-  playStream(remoteStream: any) {
-    // En React Native WebRTC, le composant RTCView ou le système gère la sortie.
-    // Cette fonction est gardée pour la compatibilité de l'interface.
-    console.debug("AudioService: Flux distant connecté au système natif");
-  }
-
+  // Polling pour l'UI (App.tsx) - Permet de voir quand le VOX active le micro
   startMetering(callback: (level: number) => void) {
-    // Simulation du VU-mètre (car l'analyse audio temps réel native est complexe sans module dédié)
-    const interval = setInterval(() => {
-      if (this.isTx) {
-        // Simule une voix qui module (entre 0.4 et 0.8)
-        callback(0.4 + Math.random() * 0.4);
-      } else {
-        // Silence ou léger bruit de fond
-        callback(Math.random() * 0.05);
-      }
-    }, 100);
-    return () => clearInterval(interval);
+    setInterval(() => {
+       callback(this.isTx ? 1 : 0);
+    }, 200);
   }
 
-  getVolume() {
-    return this.isTx ? 0.6 : 0;
+  playStream(remoteStream: MediaStream) {
+    // Géré automatiquement par WebRTC InCallManager
   }
 }
 
