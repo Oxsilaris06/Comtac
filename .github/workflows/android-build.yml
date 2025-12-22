@@ -1,8 +1,7 @@
 name: Build Android APK (Debug)
 
+# CONFIGURATION DU DÉCLENCHEUR : UNIQUEMENT MANUEL
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -17,13 +16,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # cache: 'npm'  <-- LIGNE SUPPRIMÉE POUR CORRIGER L'ERREUR
 
       - name: Configuration de Java (JDK 17)
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.8
 
       - name: Installation des dépendances
         run: |
@@ -33,7 +36,7 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      - name: Force Bundle JS (Sécurité Anti-Crash)
+      - name: Force Bundle JS
         run: |
           mkdir -p android/app/src/main/assets
           npx react-native bundle \
@@ -44,10 +47,11 @@ jobs:
             --assets-dest android/app/src/main/res
 
       - name: Build Android APK
+        # FIX MÉMOIRE : Allocation RAM Max
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
       - name: Télécharger l'APK
         uses: actions/upload-artifact@v4
