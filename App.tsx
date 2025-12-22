@@ -20,7 +20,6 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 
-// Générateur d'ID court (Type "X9F2")
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
 
 const App: React.FC = () => {
@@ -61,36 +60,23 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- 1. GESTION BATTERIE NATIVE ---
   useEffect(() => {
-    // Initial fetch
-    Battery.getBatteryLevelAsync().then(level => {
-        setUser(u => ({ ...u, bat: Math.floor(level * 100) }));
-    });
-    // Listener
-    const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => {
-      setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }));
-    });
+    Battery.getBatteryLevelAsync().then(level => setUser(u => ({ ...u, bat: Math.floor(level * 100) })));
+    const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) })));
     return () => sub && sub.remove();
   }, []);
 
-  // --- 2. GESTION BOUTON RETOUR (BackHandler) ---
   useEffect(() => {
     const backAction = () => {
       if (view === 'ops' || view === 'map') {
         Alert.alert(
           "Déconnexion", 
-          user.role === OperatorRole.HOST 
-            ? "ATTENTION: Vous êtes l'Hôte. Le salon sera fermé pour tous." 
-            : "Voulez-vous quitter le réseau ?", 
-          [
-            { text: "Annuler", onPress: () => null, style: "cancel" },
-            { text: "QUITTER", onPress: handleLogout }
-          ]
+          user.role === OperatorRole.HOST ? "ATTENTION: Vous êtes l'Hôte. Le salon sera fermé." : "Quitter le réseau ?", 
+          [{ text: "Annuler", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]
         );
-        return true; // Bloque le retour par défaut
+        return true;
       }
-      return false; // Laisse faire (ex: quitter l'app depuis le login)
+      return false;
     };
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
@@ -104,7 +90,6 @@ const App: React.FC = () => {
   }, []);
 
   const handleLogout = () => {
-      // Si Host, on pourrait envoyer un message 'HOST_LEAVE' ici
       if (peerRef.current) peerRef.current.destroy();
       setPeers({}); setPings([]); setHostId(''); setView('login');
       audioService.setTx(false); setVoxActive(false);
@@ -114,12 +99,11 @@ const App: React.FC = () => {
 
   const broadcast = useCallback((data: any) => {
     if (!data.type && data.user) data = { type: 'UPDATE', user: data.user };
-    data.from = user.id; // Signature obligatoire
+    data.from = user.id; 
     Object.values(connectionsRef.current).forEach((conn: any) => { if (conn.open) conn.send(data); });
   }, [user.id]);
 
   const handleData = useCallback((data: any, fromId: string) => {
-    // 🛡️ ANTI-CLONE : J'ignore tout message venant de moi-même
     if (data.from === user.id) return;
     if (data.user && data.user.id === user.id) return;
 
@@ -132,7 +116,6 @@ const App: React.FC = () => {
         if (list.length > 0) {
             setPeers(prev => {
                 const next = { ...prev };
-                // 🛡️ ANTI-CLONE : Je ne m'ajoute pas moi-même depuis la liste des autres
                 list.forEach((u: UserData) => { if(u.id !== user.id) next[u.id] = u; });
                 return next;
             });
@@ -154,8 +137,6 @@ const App: React.FC = () => {
         setSilenceMode(data.state);
         showToast(data.state ? "SILENCE ACTIF" : "FIN SILENCE");
         break;
-      
-      // --- APPELS PRIVÉS ---
       case 'PRIVATE_REQ':
         Alert.alert("Appel Privé", `Demande de ${data.from}`, [
             { text: "Refuser", style: "cancel" },
@@ -168,8 +149,6 @@ const App: React.FC = () => {
         break;
       case 'PRIVATE_ACK': enterPrivateMode(data.from); showToast("Canal Privé Établi"); break;
       case 'PRIVATE_END': leavePrivateMode(); showToast("Fin Canal Privé"); break;
-      
-      // --- GESTION KICK ---
       case 'KICK': Alert.alert("Exclu", "Vous avez été exclu par l'Hôte."); handleLogout(); break;
     }
   }, [user.id, showToast]);
@@ -213,7 +192,6 @@ const App: React.FC = () => {
 
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
-    // ID Court pour l'Hôte, ou auto pour client
     const myId = initialRole === OperatorRole.HOST ? generateShortId() : undefined;
     const p = new Peer(myId, CONFIG.PEER_CONFIG as any);
     peerRef.current = p;
@@ -276,7 +254,6 @@ const App: React.FC = () => {
     await audioService.init();
     if (!permission?.granted) await requestPermission();
 
-    // Ecoute du service audio (Polling 1/0 pour TX)
     audioService.startMetering((state) => {
       const isTransmitting = state === 1;
       if (isTransmitting !== user.isTx) {
@@ -407,7 +384,6 @@ const App: React.FC = () => {
         {view === 'ops' ? (
           <View style={styles.grid}>
              <OperatorCard user={user} isMe />
-             {/* APPUI LONG pour Appel Privé ou Kick */}
              {Object.values(peers).map(p => (
                  <TouchableOpacity key={p.id} onLongPress={() => requestPrivate(p.id)} activeOpacity={0.8}>
                     <OperatorCard user={p} me={user} />
