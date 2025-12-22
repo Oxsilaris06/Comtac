@@ -1,0 +1,63 @@
+name: Build Android APK (Debug)
+
+on:
+  push:
+    branches: [ main, master ] # Se déclenche sur un push vers main
+  workflow_dispatch: # Permet de lancer le build manuellement
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Configuration de Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Ajustez selon votre version
+          cache: 'npm'
+
+      - name: Configuration de Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Installation des dépendances
+        run: |
+          rm -rf node_modules
+          rm -f package-lock.json
+          npm install --legacy-peer-deps
+          npx expo install --fix
+
+      - name: Expo Prebuild
+        run: npx expo prebuild --platform android --clean
+
+      - name: Force Bundle JS (Correction Ecran Rouge)
+        run: |
+          mkdir -p android/app/src/main/assets
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.tsx \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res
+
+      - name: Build Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Télécharger l'APK (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComTac-v14-Debug-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+
+      - name: Notification Email (Optionnel)
+        if: always()
+        # GitHub envoie déjà des emails par défaut, mais vous pouvez utiliser une action tierce si besoin.
+        run: echo "Le build est terminé. L'APK est disponible dans l'onglet Actions."
