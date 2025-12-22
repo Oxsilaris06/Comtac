@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
-  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler
+  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
@@ -13,6 +13,7 @@ import * as Battery from 'expo-battery';
 import * as Clipboard from 'expo-clipboard';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
@@ -60,6 +61,13 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  // CHARGEMENT DU TRIGRAMME EN MÉMOIRE
+  useEffect(() => {
+    AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
+      if (saved) setLoginInput(saved);
+    });
+  }, []);
+
   // BATTERIE
   useEffect(() => {
     Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) })));
@@ -105,7 +113,6 @@ const App: React.FC = () => {
   }, [user.id]);
 
   const handleData = useCallback((data: any, fromId: string) => {
-    // 🛡️ ANTI-CLONE STRICT
     if (data.from === user.id) return;
     if (data.user && data.user.id === user.id) return;
 
@@ -282,6 +289,12 @@ const App: React.FC = () => {
   const handleLogin = async () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
+    
+    // SAUVEGARDE DU TRIGRAMME
+    try {
+        await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri);
+    } catch (e) {}
+
     setUser(prev => ({ ...prev, callsign: tri }));
     await startServices();
     setView('menu');
@@ -351,136 +364,146 @@ const App: React.FC = () => {
     </SafeAreaView>
   );
 
-  const renderDashboard = () => (
-    <View style={{flex: 1}}>
-      <View style={{backgroundColor: '#09090b'}}>
-          <SafeAreaView style={styles.header}>
-            <View style={styles.headerContent}>
-              <TouchableOpacity onPress={() => setView('menu')} style={{padding: 8, marginRight: 10}}>
-                  <MaterialIcons name="arrow-back" size={24} color="#a1a1aa" />
-              </TouchableOpacity>
-              <View style={{flexDirection: 'row', alignItems: 'center', flex: 1}}>
-                <MaterialIcons name="satellite" size={20} color="#3b82f6" />
-                <Text style={styles.headerTitle}> COM<Text style={{color: '#3b82f6'}}>TAC</Text></Text>
-              </View>
-              <TouchableOpacity onPress={() => setView(view === 'map' ? 'ops' : 'map')} style={[styles.navBtn, view === 'map' ? styles.navBtnActive : null]}>
-                <MaterialIcons name="map" size={16} color={view === 'map' ? 'white' : '#a1a1aa'} />
-                <Text style={[styles.navBtnText, view === 'map' ? {color:'white'} : null]}>MAP</Text>
-              </TouchableOpacity>
-            </View>
-          </SafeAreaView>
-          {silenceMode && (<View style={styles.silenceBanner}><Text style={styles.silenceText}>SILENCE RADIO</Text></View>)}
-          {privatePeerId && (<View style={[styles.silenceBanner, {backgroundColor: '#a855f7'}]}><Text style={styles.silenceText}>CANAL PRIVÉ ACTIF</Text></View>)}
-      </View>
+  const renderDashboard = () => {
+    // Calcul de la taille dynamique des cartes
+    const activePeersCount = Object.keys(peers).length;
+    const totalOperators = 1 + activePeersCount;
+    const cardWidth = totalOperators === 1 ? '100%' : '48%';
 
-      <View style={styles.mainContent}>
-        {view === 'ops' ? (
-          <View style={styles.grid}>
-             <OperatorCard user={user} isMe />
-             {Object.values(peers).map(p => (
-                 <TouchableOpacity key={p.id} onLongPress={() => requestPrivate(p.id)} activeOpacity={0.8}>
-                    <OperatorCard user={p} me={user} />
-                 </TouchableOpacity>
-             ))}
-          </View>
-        ) : (
-          <View style={{flex: 1}}>
-            <TacticalMap 
-              me={user} peers={peers} pings={pings} 
-              mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
-              showPings={showPings} isHost={user.role === OperatorRole.HOST}
-              onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
-              onPingMove={(p) => { 
-                setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
-                broadcast({ type: 'PING_MOVE', id: p.id, lat: p.lat, lng: p.lng }); 
-              }}
-              onPingDelete={(id) => {
-                setPings(prev => prev.filter(p => p.id !== id));
-                broadcast({ type: 'PING_DELETE', id: id });
-              }}
-            />
-            <View style={styles.mapControls}>
-                <TouchableOpacity onPress={() => setMapMode(m => m === 'dark' ? 'light' : m === 'light' ? 'satellite' : 'dark')} style={styles.mapBtn}>
-                    <MaterialIcons name={mapMode === 'dark' ? 'dark-mode' : mapMode === 'light' ? 'light-mode' : 'satellite'} size={24} color="#d4d4d8" />
+    return (
+        <View style={{flex: 1}}>
+        <View style={{backgroundColor: '#09090b'}}>
+            <SafeAreaView style={styles.header}>
+                <View style={styles.headerContent}>
+                <TouchableOpacity onPress={() => setView('menu')} style={{padding: 8, marginRight: 10}}>
+                    <MaterialIcons name="arrow-back" size={24} color="#a1a1aa" />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
-                    <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
+                <View style={{flexDirection: 'row', alignItems: 'center', flex: 1}}>
+                    <MaterialIcons name="satellite" size={20} color="#3b82f6" />
+                    <Text style={styles.headerTitle}> COM<Text style={{color: '#3b82f6'}}>TAC</Text></Text>
+                </View>
+                <TouchableOpacity onPress={() => setView(view === 'map' ? 'ops' : 'map')} style={[styles.navBtn, view === 'map' ? styles.navBtnActive : null]}>
+                    <MaterialIcons name="map" size={16} color={view === 'map' ? 'white' : '#a1a1aa'} />
+                    <Text style={[styles.navBtnText, view === 'map' ? {color:'white'} : null]}>MAP</Text>
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => setShowPings(!showPings)} style={styles.mapBtn}>
-                    <MaterialIcons name={showPings ? 'location-on' : 'location-off'} size={24} color="#d4d4d8" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setIsPingMode(!isPingMode)} style={[styles.mapBtn, isPingMode ? {backgroundColor: '#dc2626', borderColor: '#f87171'} : null]}>
-                    <MaterialIcons name="ads-click" size={24} color="white" />
-                </TouchableOpacity>
-            </View>
-          </View>
-        )}
-      </View>
+                </View>
+            </SafeAreaView>
+            {silenceMode && (<View style={styles.silenceBanner}><Text style={styles.silenceText}>SILENCE RADIO</Text></View>)}
+            {privatePeerId && (<View style={[styles.silenceBanner, {backgroundColor: '#a855f7'}]}><Text style={styles.silenceText}>CANAL PRIVÉ ACTIF</Text></View>)}
+        </View>
 
-      <View style={styles.footer}>
-        <View style={styles.statusRow}>
-            {user.role === OperatorRole.HOST ? (
-               <TouchableOpacity 
-                  onPress={() => { const ns = !silenceMode; setSilenceMode(ns); broadcast({ type: 'SILENCE', state: ns }); if(ns) {setVoxActive(false); audioService.setTx(false);} }}
-                  style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444'} : {borderColor: '#ef4444'}]}
-               >
-                   <Text style={[styles.statusBtnText, silenceMode ? {color:'white'} : {color: '#ef4444'}]}>SILENCE</Text>
-               </TouchableOpacity>
-            ) : null}
-            {privatePeerId && (
-                <TouchableOpacity onPress={() => { const conn = connectionsRef.current[privatePeerId]; if(conn) conn.send({type: 'PRIVATE_END'}); leavePrivateMode(); }} style={[styles.statusBtn, {borderColor: '#a855f7'}]}>
-                    <Text style={[styles.statusBtnText, {color: '#a855f7'}]}>QUITTER PRIVÉ</Text>
-                </TouchableOpacity>
+        <View style={styles.mainContent}>
+            {view === 'ops' ? (
+                // AJOUT DU SCROLLVIEW + STYLE DYNAMIQUE
+                <ScrollView contentContainerStyle={styles.grid}>
+                    <OperatorCard user={user} isMe style={{ width: cardWidth }} />
+                    {Object.values(peers).map(p => (
+                        <TouchableOpacity 
+                            key={p.id} 
+                            onLongPress={() => requestPrivate(p.id)} 
+                            activeOpacity={0.8}
+                            style={{ width: cardWidth, marginBottom: 10 }}
+                        >
+                            <OperatorCard user={p} me={user} style={{ width: '100%' }} />
+                        </TouchableOpacity>
+                    ))}
+                </ScrollView>
+            ) : (
+            <View style={{flex: 1}}>
+                <TacticalMap 
+                me={user} peers={peers} pings={pings} 
+                mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
+                showPings={showPings} isHost={user.role === OperatorRole.HOST}
+                onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
+                onPingMove={(p) => { 
+                    setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
+                    broadcast({ type: 'PING_MOVE', id: p.id, lat: p.lat, lng: p.lng }); 
+                }}
+                onPingDelete={(id) => {
+                    setPings(prev => prev.filter(p => p.id !== id));
+                    broadcast({ type: 'PING_DELETE', id: id });
+                }}
+                />
+                <View style={styles.mapControls}>
+                    <TouchableOpacity onPress={() => setMapMode(m => m === 'dark' ? 'light' : m === 'light' ? 'satellite' : 'dark')} style={styles.mapBtn}>
+                        <MaterialIcons name={mapMode === 'dark' ? 'dark-mode' : mapMode === 'light' ? 'light-mode' : 'satellite'} size={24} color="#d4d4d8" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
+                        <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowPings(!showPings)} style={styles.mapBtn}>
+                        <MaterialIcons name={showPings ? 'location-on' : 'location-off'} size={24} color="#d4d4d8" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setIsPingMode(!isPingMode)} style={[styles.mapBtn, isPingMode ? {backgroundColor: '#dc2626', borderColor: '#f87171'} : null]}>
+                        <MaterialIcons name="ads-click" size={24} color="white" />
+                    </TouchableOpacity>
+                </View>
+            </View>
             )}
-            {!privatePeerId && [OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
+        </View>
+
+        <View style={styles.footer}>
+            <View style={styles.statusRow}>
+                {user.role === OperatorRole.HOST ? (
                 <TouchableOpacity 
-                    key={s} 
-                    onPress={() => {
-                        // FIX: Mise à jour directe de l'état local et broadcast (plus de setStatus crash)
-                        setUser(prev => {
-                            const updated = { ...prev, status: s };
-                            broadcast({ type: 'UPDATE', user: updated });
-                            return updated;
-                        });
-                    }}
-                    style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}
+                    onPress={() => { const ns = !silenceMode; setSilenceMode(ns); broadcast({ type: 'SILENCE', state: ns }); if(ns) {setVoxActive(false); audioService.setTx(false);} }}
+                    style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444'} : {borderColor: '#ef4444'}]}
                 >
-                    <Text style={[styles.statusBtnText, user.status === s ? {color:'white'} : null]}>{s}</Text>
+                    <Text style={[styles.statusBtnText, silenceMode ? {color:'white'} : {color: '#ef4444'}]}>SILENCE</Text>
                 </TouchableOpacity>
-            ))}
+                ) : null}
+                {privatePeerId && (
+                    <TouchableOpacity onPress={() => { const conn = connectionsRef.current[privatePeerId]; if(conn) conn.send({type: 'PRIVATE_END'}); leavePrivateMode(); }} style={[styles.statusBtn, {borderColor: '#a855f7'}]}>
+                        <Text style={[styles.statusBtnText, {color: '#a855f7'}]}>QUITTER PRIVÉ</Text>
+                    </TouchableOpacity>
+                )}
+                {!privatePeerId && [OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
+                    <TouchableOpacity 
+                        key={s} 
+                        onPress={() => {
+                            setUser(prev => {
+                                const updated = { ...prev, status: s };
+                                broadcast({ type: 'UPDATE', user: updated });
+                                return updated;
+                            });
+                        }}
+                        style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}
+                    >
+                        <Text style={[styles.statusBtnText, user.status === s ? {color:'white'} : null]}>{s}</Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
+            <View style={styles.controlsRow}>
+                <TouchableOpacity onPress={() => { setVoxActive(!voxActive); audioService.toggleVox(); }} style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}>
+                    <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
+                </TouchableOpacity>
+                <TouchableOpacity 
+                    onPressIn={() => { if(silenceMode && user.role !== OperatorRole.HOST) return; if(!voxActive) { audioService.setTx(true); setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}} 
+                    onPressOut={() => { if(!voxActive) { audioService.setTx(false); setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); }}} 
+                    style={[styles.pttBtn, user.isTx ? {backgroundColor: '#2563eb'} : null, silenceMode && user.role !== OperatorRole.HOST ? {opacity:0.5} : null]}
+                    disabled={silenceMode && user.role !== OperatorRole.HOST}
+                >
+                    <MaterialIcons name="mic" size={40} color={user.isTx ? 'white' : '#3f3f46'} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setShowQRModal(true)} style={styles.qrBtn}>
+                    <MaterialIcons name="qr-code-2" size={24} color="#d4d4d8" />
+                </TouchableOpacity>
+            </View>
         </View>
-        <View style={styles.controlsRow}>
-            <TouchableOpacity onPress={() => { setVoxActive(!voxActive); audioService.toggleVox(); }} style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}>
-                <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
-            </TouchableOpacity>
-            <TouchableOpacity 
-                onPressIn={() => { if(silenceMode && user.role !== OperatorRole.HOST) return; if(!voxActive) { audioService.setTx(true); setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }}} 
-                onPressOut={() => { if(!voxActive) { audioService.setTx(false); setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); }}} 
-                style={[styles.pttBtn, user.isTx ? {backgroundColor: '#2563eb'} : null, silenceMode && user.role !== OperatorRole.HOST ? {opacity:0.5} : null]}
-                disabled={silenceMode && user.role !== OperatorRole.HOST}
-            >
-                <MaterialIcons name="mic" size={40} color={user.isTx ? 'white' : '#3f3f46'} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowQRModal(true)} style={styles.qrBtn}>
-                <MaterialIcons name="qr-code-2" size={24} color="#d4d4d8" />
-            </TouchableOpacity>
         </View>
-      </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
       
-      {/* Gestion de l'affichage principal */}
       {view === 'login' ? renderLogin() :
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
       {/* --- MODALES --- */}
       
-      {/* Modale QR Code */}
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -496,7 +519,6 @@ const App: React.FC = () => {
         </View>
       </Modal>
 
-      {/* Modale Scanner Camera */}
       <Modal visible={showScanner} animationType="slide">
         <View style={{flex: 1, backgroundColor: 'black'}}>
           <CameraView 
@@ -515,7 +537,6 @@ const App: React.FC = () => {
         </View>
       </Modal>
 
-      {/* Modale Envoi Ping */}
       <Modal visible={showPingModal} animationType="fade" transparent>
          <View style={styles.modalOverlay}>
             <View style={[styles.modalContent, {backgroundColor: '#18181b', borderWidth: 1, borderColor: '#333'}]}>
@@ -552,7 +573,6 @@ const App: React.FC = () => {
          </View>
       </Modal>
 
-      {/* Toast Notification */}
       {toast && (
         <View style={[styles.toast, toast.type === 'error' && {backgroundColor: '#ef4444'}]}>
            <Text style={styles.toastText}>{toast.msg}</Text>
