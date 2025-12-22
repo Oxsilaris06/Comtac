@@ -63,7 +63,6 @@ const App: React.FC = () => {
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<Record<string, any>>({});
   const lastLocationRef = useRef<any>(null);
-  const migrationTimeoutRef = useRef<any>(null); // Timer pour éviter la migration instantanée (faux positif)
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
   useEffect(() => {
@@ -131,7 +130,6 @@ const App: React.FC = () => {
 
     switch (data.type) {
       case 'UPDATE': case 'FULL': case 'UPDATE_USER':
-        // FIX DUPLICATION: On vérifie strictement que l'ID n'est pas le nôtre
         if (data.user && data.user.id !== user.id) {
              setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
         }
@@ -142,7 +140,6 @@ const App: React.FC = () => {
             setPeers(prev => {
                 const next = { ...prev };
                 list.forEach((u: UserData) => { 
-                    // FIX DUPLICATION: Filtrage strict
                     if(u.id && u.id !== user.id) next[u.id] = u; 
                 });
                 return next;
@@ -215,48 +212,30 @@ const App: React.FC = () => {
       showToast("Demande envoyée");
   };
 
-  // --- LOGIQUE MIGRATION D'HÔTE ---
   const handleHostDisconnect = () => {
-      if (user.role === OperatorRole.HOST) return; // Si je suis déjà chef, pas de migration
-      
+      if (user.role === OperatorRole.HOST) return;
       showToast("CONNEXION PERDUE - MIGRATION...", "error");
-      
-      // 1. On liste tous les candidats (Soi-même + les pairs restants)
-      // L'ancien hôte est déjà déconnecté, donc pas dans 'peers' si on le nettoie, 
-      // mais par sécurité on filtre l'ancien hostId
-      const candidates = Object.values(peers)
-          .filter(p => p.id !== hostId && p.id !== user.id); // Les autres
-      candidates.push(user); // Moi
-
-      // 2. On trie par ancienneté (joinedAt)
+      const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
+      candidates.push(user);
       candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-
       const newHost = candidates[0];
-
       if (newHost.id === user.id) {
-          // JE SUIS L'ÉLU
           promoteToHost();
       } else {
-          // JE SUIS TOUJOURS CLIENT, JE REJOINS L'ÉLU
-          // Délai aléatoire pour éviter DDOS sur le nouveau chef
-          setTimeout(() => {
-              connectToHost(newHost.id);
-          }, 500 + Math.random() * 1000);
+          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
       }
   };
 
   const promoteToHost = () => {
       setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
-      setHostId(user.id); // Je deviens la référence
+      setHostId(user.id);
       showToast("JE SUIS LE NOUVEL HÔTE", "info");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // On garde les connexions entrantes qui pourraient arriver des autres
   };
 
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
     const myId = initialRole === OperatorRole.HOST ? generateShortId() : undefined;
-    // CONFIG PEERJS (Récupère constants.ts)
     const p = new Peer(myId, CONFIG.PEER_CONFIG as any);
     peerRef.current = p;
 
@@ -271,14 +250,10 @@ const App: React.FC = () => {
     });
 
     p.on('connection', (conn) => {
-      if (bannedPeers.includes(conn.peer)) {
-          conn.close();
-          return;
-      }
+      if (bannedPeers.includes(conn.peer)) { conn.close(); return; }
       connectionsRef.current[conn.peer] = conn;
       conn.on('data', (data: any) => handleData(data, conn.peer));
       conn.on('open', () => {
-        // Si je suis HOST (ou devenu HOST), je sync tout le monde
         if (user.role === OperatorRole.HOST || initialRole === OperatorRole.HOST) {
           const list = Object.values(peers); list.push(user);
           conn.send({ type: 'SYNC', list: list, silence: silenceMode });
@@ -296,22 +271,12 @@ const App: React.FC = () => {
       call.on('stream', (rs) => audioService.playStream(rs));
     });
     
-    p.on('error', (err) => {
-        // Ignorer erreur fatale peerjs si déco
-        if (err.type === 'peer-unavailable') {
-             // C'est souvent ici qu'on détecte que l'hôte n'est plus là lors d'une tentative de connexion
-             // Mais pour une connexion active, c'est 'close' sur la conn qui prime.
-        }
-    });
+    p.on('error', (err) => { if (err.type === 'peer-unavailable') {} });
   }, [peers, user, handleData, showToast, silenceMode, pings, bannedPeers]);
 
   const connectToHost = useCallback((targetId: string) => {
     if (!peerRef.current || !audioService.stream) return;
-    
-    // Nettoyage ancienne connexion host si existe
-    if (hostId && connectionsRef.current[hostId]) {
-        connectionsRef.current[hostId].close();
-    }
+    if (hostId && connectionsRef.current[hostId]) connectionsRef.current[hostId].close();
 
     setHostId(targetId);
     const conn = peerRef.current.connect(targetId);
@@ -325,18 +290,8 @@ const App: React.FC = () => {
     });
     
     conn.on('data', (data: any) => handleData(data, targetId));
-    
-    // DETECTION PERTE HÔTE
-    conn.on('close', () => {
-        // Si la fermeture n'est pas volontaire (logout)
-        if (view === 'ops' || view === 'map') {
-            handleHostDisconnect();
-        }
-    });
-    
-    // Fallback erreur
+    conn.on('close', () => { if (view === 'ops' || view === 'map') handleHostDisconnect(); });
     conn.on('error', () => handleHostDisconnect());
-
   }, [user, handleData, showToast, hostId, view]);
 
   const startServices = async () => {
@@ -361,7 +316,11 @@ const App: React.FC = () => {
     Location.watchPositionAsync(
       { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
       (loc) => {
-        const { latitude, longitude, speed, heading } = loc.coords;
+        const { latitude, longitude, speed, heading, accuracy } = loc.coords;
+        
+        // FIX: Rejet des points fantômes (Précision > 30m ignorée)
+        if (accuracy && accuracy > 30) return;
+
         setUser(prev => {
           const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
           const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
@@ -450,7 +409,6 @@ const App: React.FC = () => {
   );
 
   const renderDashboard = () => {
-    // On filtre ici aussi pour l'affichage, double sécurité anti-doublon
     const filteredPeers = Object.values(peers).filter(p => p.id !== user.id);
     const totalOperators = 1 + filteredPeers.length;
     const cardWidth = totalOperators === 1 ? '100%' : '48%';
