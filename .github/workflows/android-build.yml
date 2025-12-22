@@ -33,22 +33,27 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      # --- CORRECTIF CRITIQUE ---
-      # 1. On modifie le wrapper APRES le prebuild (car prebuild régénère le dossier).
-      # 2. On passe à la version '8.7-bin' (plus stable et fichier plus léger pour éviter le 503).
+      # --- ETAPE CRITIQUE AJOUTÉE : GÉNÉRATION DU BUNDLE JS ---
+      # C'est ce qui manque et cause votre erreur "Unable to load script"
+      - name: Force Bundle JS
+        run: |
+          mkdir -p android/app/src/main/assets
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.tsx \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res
+
       - name: Fix Gradle Wrapper (Force 8.7-bin)
         run: |
           cd android/gradle/wrapper
-          # On remplace l'URL pour utiliser la version binaire (plus légère) et stable
           sed -i 's/distributionUrl=.*$/distributionUrl=https\:\/\/services.gradle.org\/distributions\/gradle-8.7-bin.zip/g' gradle-wrapper.properties
-          # Vérification visuelle
-          cat gradle-wrapper.properties
 
       - name: Build Android APK
         run: |
           cd android
           chmod +x gradlew
-          # On utilise ./gradlew (le wrapper) qui va télécharger la version 8.7 définie juste au-dessus
           ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
       - name: Télécharger l'APK
