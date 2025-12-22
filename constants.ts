@@ -6,6 +6,7 @@ export const CONFIG = {
   TRIGRAM_STORAGE_KEY: 'comtac_v14_trigram',
   
   // Configuration PeerJS (IDENTIQUE au web comtac.html)
+  // Utilise les serveurs STUN de Google pour traverser le NAT
   PEER_CONFIG: {
     debug: 1,
     config: {
@@ -17,7 +18,7 @@ export const CONFIG = {
     },
   },
   
-  // Seuil micro
+  // Seuil de détection vocale
   VAD_THRESHOLD: 0.02,
 };
 

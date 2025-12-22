@@ -85,8 +85,11 @@ const App: React.FC = () => {
     if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié !"); }
   };
 
+  // --- PROTOCOLE RÉSEAU (Compatible Web) ---
   const broadcast = useCallback((data: any) => {
+    // Si c'est une update user sans type, on force le type 'UPDATE'
     if (!data.type && data.user) data = { type: 'UPDATE', user: data.user };
+    
     Object.values(connectionsRef.current).forEach((conn: any) => {
       if (conn.open) conn.send(data);
     });
@@ -94,29 +97,38 @@ const App: React.FC = () => {
 
   const handleData = useCallback((data: any, fromId: string) => {
     switch (data.type) {
+      // Compatibilité Web & Mobile
       case 'UPDATE': 
-      case 'FULL':   
+      case 'FULL':
+      case 'UPDATE_USER':
         if (data.user) setPeers(prev => ({ ...prev, [data.user.id]: data.user }));
         break;
+        
       case 'SYNC': 
-        if (data.list) {
+      case 'SYNC_PEERS':
+        const list = data.list || (data.peers ? Object.values(data.peers) : []);
+        if (list.length > 0) {
             const newPeers: Record<string, UserData> = {};
-            data.list.forEach((u: UserData) => { if(u.id !== user.id) newPeers[u.id] = u; });
+            list.forEach((u: UserData) => { if(u.id !== user.id) newPeers[u.id] = u; });
             setPeers(newPeers);
         }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
+        
       case 'PING':
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setPings(prev => [...prev, data.ping]);
         showToast(`PING: ${data.ping.msg}`);
         break;
+        
       case 'PING_MOVE': 
         setPings(prev => prev.map(p => p.id === data.id ? { ...p, lat: data.lat, lng: data.lng } : p));
         break;
+        
       case 'PING_DELETE': 
         setPings(prev => prev.filter(p => p.id !== data.id));
         break;
+        
       case 'SILENCE':
         setSilenceMode(data.state);
         showToast(data.state ? "SILENCE ACTIF" : "FIN SILENCE");
@@ -144,6 +156,7 @@ const App: React.FC = () => {
       conn.on('data', (data: any) => handleData(data, conn.peer));
       conn.on('open', () => {
         if (initialRole === OperatorRole.HOST) {
+          // Format Web: SYNC + liste
           const list = Object.values(peers); list.push(user);
           conn.send({ type: 'SYNC', list: list, silence: silenceMode });
         }
@@ -166,6 +179,7 @@ const App: React.FC = () => {
     
     conn.on('open', () => {
       showToast("CONNECTÉ");
+      // Format Web: FULL
       conn.send({ type: 'FULL', user: user });
       const call = peerRef.current!.call(targetId, audioService.stream!);
       call.on('stream', (rs) => audioService.playStream(rs));
@@ -176,7 +190,7 @@ const App: React.FC = () => {
   const setStatus = (s: OperatorStatus) => {
     setUser(prev => {
       const u = { ...prev, status: s };
-      broadcast({ type: 'UPDATE', user: u });
+      broadcast({ type: 'UPDATE', user: u }); // Format Web
       return u;
     });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -210,8 +224,11 @@ const App: React.FC = () => {
         setUser(prev => {
           const newHead = (speed && speed > 0.5 && heading !== null) ? heading : prev.head;
           const newUser = { ...prev, lat: latitude, lng: longitude, head: newHead || prev.head };
-          if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
-            broadcast({ type: 'UPDATE', user: newUser });
+          
+          if (!lastLocationRef.current || 
+              Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || 
+              Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
+            broadcast({ type: 'UPDATE', user: newUser }); // Format Web
             lastLocationRef.current = { lat: latitude, lng: longitude };
           }
           return newUser;
@@ -244,6 +261,7 @@ const App: React.FC = () => {
     setTimeout(() => joinSession(data), 500);
   };
 
+  // --- UI RENDER ---
   const renderLogin = () => (
     <View style={styles.centerContainer}>
       <MaterialIcons name="fingerprint" size={80} color="#3b82f6" style={{opacity: 0.8, marginBottom: 30}} />
