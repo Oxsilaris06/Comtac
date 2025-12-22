@@ -53,7 +53,7 @@ module.exports = function(config) {
             targetSdkVersion: 34, 
             buildToolsVersion: "34.0.0" 
           },
-          // CORRECTION BUG PODFILE (Images 1 & 2)
+          // CORRECTION DU BUG DE BUILD IOS (PODFILE)
           ios: {
             deploymentTarget: "13.4"
           }
