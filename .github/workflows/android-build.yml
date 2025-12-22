@@ -24,6 +24,13 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # RETOUR DE L'ACTION, MAIS SANS LE CACHE (Anti-Bug 400)
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.6
+          cache-disabled: true 
+
       - name: Installation des dépendances
         run: |
           npm cache clean --force
@@ -33,20 +40,12 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      # --- CORRECTIF RÉSEAU GRADLE ---
-      # On force la version 8.6 au lieu de la 8.8 qui renvoie une erreur 503
-      - name: Fix Gradle Version (Downgrade to 8.6)
-        run: |
-          cd android/gradle/wrapper
-          sed -i 's/gradle-8.8-all.zip/gradle-8.6-all.zip/g' gradle-wrapper.properties
-          cat gradle-wrapper.properties # Vérification visuelle dans les logs
-
       - name: Build Android APK
         run: |
           cd android
-          chmod +x gradlew
-          # Le téléchargement se fera maintenant sur la version 8.6
-          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
+          # IMPORTANT : On utilise 'gradle' (l'outil installé par l'action)
+          # au lieu de './gradlew' (le script qui essaie de télécharger et échoue)
+          gradle assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
       - name: Télécharger l'APK
         uses: actions/upload-artifact@v4
