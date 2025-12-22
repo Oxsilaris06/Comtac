@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
+// IMPORT CORRECT : Text est bien présent
 import { StyleSheet, View, Text, Platform } from 'react-native';
 import MapView, { UrlTile, Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserData, PingData, OperatorStatus } from '../types';
 
-// URLs des tuiles (OSM / Satellite)
 const TILE_URL_DARK = "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png";
 const TILE_URL_LIGHT = "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
 const TILE_URL_SAT = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
@@ -17,10 +17,22 @@ const COLORS = {
   [OperatorStatus.PROGRESSION]: '#3b82f6',
 };
 
-// SÉCURITÉ CRITIQUE : Empêche le crash si GPS = 0,0 (Null Island)
+// SÉCURITÉ : Ignore les coordonnées invalides (Null Island)
 const isValidCoord = (val: any): boolean => {
   return typeof val === 'number' && !isNaN(val) && val !== null && Math.abs(val) > 0.0001;
 };
+
+// STYLE : Rend le fond Google Maps invisible pour laisser place à OSM
+const BLANK_MAP_STYLE = [
+  { "elementType": "geometry", "stylers": [{ "color": "#212121" }] },
+  { "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
+  { "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
+  { "elementType": "labels.text.stroke", "stylers": [{ "color": "#212121" }] },
+  { "featureType": "administrative", "elementType": "geometry", "stylers": [{ "color": "#757575" }] },
+  { "featureType": "poi", "stylers": [{ "visibility": "off" }] },
+  { "featureType": "road", "stylers": [{ "visibility": "off" }] },
+  { "featureType": "transit", "stylers": [{ "visibility": "off" }] }
+];
 
 interface TacticalMapProps {
   me: UserData;
@@ -70,7 +82,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         const history = next[id];
         const last = history[history.length - 1];
 
-        // Filtre de mouvement (évite de surcharger la mémoire)
+        // Filtre de mouvement (> 5m)
         if (!last || (Math.abs(last.latitude - lat!) > 0.00005 || Math.abs(last.longitude - lng!) > 0.00005)) {
           history.push({ latitude: lat!, longitude: lng! });
           if (history.length > 50) history.shift();
@@ -87,7 +99,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
     });
   }, [me?.lat, me?.lng, peers, showTrails]);
 
-  // 3. Rendu des Opérateurs
   const renderMarker = (u: UserData, isMe: boolean) => {
     if (!u || !isValidCoord(u.lat) || !isValidCoord(u.lng)) return null;
     const color = COLORS[u.status] || COLORS.CLEAR;
@@ -99,7 +110,8 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         anchor={{ x: 0.5, y: 0.5 }}
         flat={true}
         rotation={u.head || 0}
-        zIndex={isMe ? 150 : 50}
+        // CORRECTION Z-INDEX : Me=100, Peers=50. C'est > UrlTile(1) donc visible.
+        zIndex={isMe ? 100 : 50} 
       >
         <View style={styles.markerContainer}>
           <View style={[styles.labelBadge, { borderColor: color }]}>
@@ -117,34 +129,36 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_DEFAULT}
-        mapType="none" /* SOLUTION: "none" désactive le moteur de rendu Google qui bloquait les tuiles */
+        mapType="standard" /* FIX: Standard initialise le moteur */
+        customMapStyle={BLANK_MAP_STYLE} /* FIX: Invisible pour laisser place à OSM */
         rotateEnabled={true}
         showsUserLocation={false}
         moveOnMarkerPress={false}
-        // Callbacks protégés
         onPress={(e) => { if(pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
         onLongPress={(e) => { if(!pingMode && e.nativeEvent.coordinate) onPing(e.nativeEvent.coordinate); }}
         initialRegion={{
-            latitude: 48.8566, longitude: 2.3522, // Paris (Défaut sûr)
+            latitude: 48.8566, longitude: 2.3522,
             latitudeDelta: 0.05, longitudeDelta: 0.05,
         }}
       >
-        {/* TUILES OSM / SATELLITE */}
+        {/* TUILE : zIndex=1 (Fond) + shouldReplaceMapContent=true (Force l'affichage) */}
         <UrlTile
           key={mapMode}
           urlTemplate={currentTileUrl}
           maximumZ={19}
           flipY={false}
-          zIndex={-1} /* IMPORTANT: -1 assure que les tuiles sont le fond de carte */
+          zIndex={1} 
           tileSize={256}
+          shouldReplaceMapContent={true} 
         />
 
-        {/* TRACÉS */}
         {showTrails && Object.entries(trails).map(([id, coords]) => {
            const isMe = id === 'me';
            const userObj = isMe ? me : Object.values(peers).find(p => p.id === id);
            const color = userObj ? (COLORS[userObj.status] || COLORS.CLEAR) : '#888';
            if (coords.length < 2) return null;
+           
+           // TRAIL : zIndex=10 (Au dessus de la carte, sous les marqueurs)
            return (
              <Polyline
                key={`trail-${id}`}
@@ -157,13 +171,12 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
            );
         })}
 
-        {/* MARQUEURS */}
         {renderMarker(me, true)}
         {peers && Object.values(peers).map(p => renderMarker(p, false))}
 
-        {/* PINGS */}
         {pings && pings.map(ping => {
             if(!isValidCoord(ping.lat) || !isValidCoord(ping.lng)) return null;
+            // PING : zIndex=200 (Tout au dessus)
             return (
               <Marker
                 key={ping.id}
@@ -171,7 +184,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                 draggable={ping.sender === me?.callsign}
                 onDragEnd={(e) => onPingMove({ ...ping, lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude })}
                 onCalloutPress={() => { if (ping.sender === me?.callsign || me?.role === 'HOST') onPingDelete(ping.id); }}
-                zIndex={100}
+                zIndex={200}
               >
                 <View style={styles.pingMarker}>
                   <MaterialIcons name="location-on" size={40} color="#ef4444" />
@@ -189,7 +202,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#212121' }, // Fond gris si les tuiles chargent lentement
+  container: { flex: 1, backgroundColor: '#212121' },
   map: { width: '100%', height: '100%' },
   markerContainer: { alignItems: 'center', justifyContent: 'center', width: 60, height: 60 },
   labelBadge: {
