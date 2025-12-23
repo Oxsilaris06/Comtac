@@ -28,26 +28,25 @@ class AudioService {
   async init(): Promise<boolean> {
     try {
       // ÉTAPE 1 : Démarrer le moteur WebRTC (Micro)
-      // C'est lui qui risque de basculer en mode "Appel". On le fait en premier.
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
       this.setTx(false);
 
       // ÉTAPE 2 : Forcer la configuration Audio "Media/Haut-Parleur"
       try {
-          // On utilise 'video' qui favorise le haut-parleur et le volume média
-          InCallManager.start({ media: 'video' }); 
+          // MODIFICATION CRITIQUE : 
+          // On utilise 'audio' (et non video) mais on force le mode 'media' via setSpeakerphoneOn
+          // pour éviter que l'OS ne bascule en mode "In-Communication" exclusif.
+          InCallManager.start({ media: 'audio' }); 
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
-          InCallManager.setKeepScreenOn(true); // Garde le CPU éveillé
+          InCallManager.setKeepScreenOn(true); 
           
           // Boost Volume Système
           await VolumeManager.setVolume(1.0); 
       } catch (e) { console.log("Audio Config Error:", e); }
 
       // ÉTAPE 3 : Prendre le Focus "Musique/AVRCP" (CRITIQUE : EN DERNIER)
-      // En déclarant le service musical maintenant, on "écrase" la priorité d'appel de WebRTC
-      // pour la gestion des boutons bluetooth.
       this.setupMusicControl();
 
       // ÉTAPE 4 : Setup des Triggers annexes (VOX & Volume Physique)
@@ -77,7 +76,6 @@ class AudioService {
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
              
              // Gestion agressive du Focus Audio : 
-             // Si une autre app nous coupe, on reprend la main dès que possible (true)
              MusicControl.handleAudioInterruptions(true);
 
              // Fonction de bascule unique (Toggle)
