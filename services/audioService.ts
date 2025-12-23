@@ -23,12 +23,12 @@ class AudioService {
 
   async init(): Promise<boolean> {
     try {
-      // 1. Démarrage Micro (STRICTEMENT OFF AU DÉPART)
+      // 1. Audio / Micro (STRICTEMENT OFF AU DÉPART)
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
       this.setTx(false);
 
-      // 2. Liaison HeadsetService (Commandes & Routage)
+      // 2. Liaison HeadsetService
       headsetService.setCommandCallback((source) => {
           this.toggleVox(); 
       });
@@ -36,30 +36,25 @@ class AudioService {
       headsetService.setConnectionCallback((isConnected, type) => {
           console.log(`[Audio] Routing Update: ${type}`);
           if(isConnected) {
-              // Casque connecté : On désactive le haut-parleur forcé
               InCallManager.setForceSpeakerphoneOn(false);
               this.updateNotification(this.currentRoomId, `Casque Actif (${type})`);
           } else {
-              // Pas de casque : On force le haut-parleur (Talkie)
               InCallManager.setForceSpeakerphoneOn(true);
               this.updateNotification(this.currentRoomId, `Haut-Parleur Actif`);
           }
-          // On s'assure que le focus média est conservé après un changement de route
           this.refreshMediaFocus();
       });
 
       // 3. Configuration Audio Initiale
       try {
-          // Mode 'audio' standard (meilleure compatibilité Bluetooth)
           InCallManager.start({ media: 'audio' });
-          // Par défaut on suppose pas de casque -> Speaker
           InCallManager.setForceSpeakerphoneOn(true);
-          InCallManager.setKeepScreenOn(true);
+          InCallManager.setKeepScreenOn(true); 
           await VolumeManager.setVolume(1.0); 
       } catch (e) { console.log("Audio Config Error:", e); }
 
-      // 4. Setup MusicControl (Pour Bluetooth & Notif)
-      this.setupMusicControl();
+      // 4. Setup MusicControl (PRIORITÉ BLUETOOTH)
+      this.forceBluetoothPriority();
 
       // 5. Vox & KeepAlive
       this.setupVox();
@@ -72,7 +67,7 @@ class AudioService {
     }
   }
 
-  // --- UI ---
+  // --- UI SUBSCRIPTION ---
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
       this.listeners.push(callback);
       return () => { this.listeners = this.listeners.filter(l => l !== callback); };
@@ -82,10 +77,17 @@ class AudioService {
       this.listeners.forEach(cb => cb(this.mode));
   }
 
-  // --- MUSIC CONTROL (BACKUP BLUETOOTH) ---
+  // --- METHODE PUBLIQUE DE FORÇAGE (Appelée par App.tsx) ---
+  public forceBluetoothPriority() {
+      this.setupMusicControl();
+  }
+
+  // --- GESTION MUSIQUE / BLUETOOTH ---
   private setupMusicControl() {
       try {
           if (Platform.OS === 'android') {
+             // CRITIQUE : On stop pour forcer le système à nous redonner la main
+             // Utile après l'usage de la Caméra ou WebRTC qui volent le focus
              MusicControl.stopControl();
              MusicControl.enableBackgroundMode(true);
              
@@ -100,12 +102,12 @@ class AudioService {
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
              MusicControl.handleAudioInterruptions(true);
 
-             // Redirection vers HeadsetService pour déduplication
              commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => {
                  headsetService.triggerCommand('BLUETOOTH_' + cmd);
              }));
 
-             this.updateNotification('Prêt');
+             // On rétablit la notification avec l'état actuel
+             this.updateNotification(this.currentRoomId !== 'Déconnecté' ? this.currentRoomId : 'Prêt');
           }
       } catch (e) { }
   }
@@ -116,11 +118,9 @@ class AudioService {
       }
   }
 
-  // --- LOGIQUE METIER ---
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // Si passage en PTT, coupure immédiate
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
