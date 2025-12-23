@@ -16,8 +16,11 @@ class AudioService {
   voxTimer: any = null;
 
   currentRoomId: string = 'Déconnecté';
+  
+  // Variables pour la logique de contrôle (Anti-rebond & Double Clic)
   lastVolume: number = 0;
   lastVolumeUpTime: number = 0;
+  lastToggleTime: number = 0; // Sécurité anti-spam commandes BT
 
   async init(): Promise<boolean> {
     try {
@@ -34,36 +37,53 @@ class AudioService {
           InCallManager.setKeepScreenOn(true);
       } catch (e) { console.log("Audio Boost Error:", e); }
 
-      // --- SETUP NOTIFICATION & BLUETOOTH (ROBUSTE) ---
+      // --- SETUP COMMANDES UNIVERSELLES (BLUETOOTH & NOTIF) ---
       try {
           if (Platform.OS === 'android') {
              MusicControl.enableBackgroundMode(true);
              
-             // GESTION ROBUSTE : On active une large gamme de contrôles pour capter tous les casques
-             // Même si on cible Next/Prev, certains casques envoient Play/Pause
+             // 1. ACTIVATION DE TOUTES LES COMMANDES POSSIBLES (AVRCP Catch-All)
+             // Cela garantit que peu importe le bouton appuyé, l'événement est capté
              MusicControl.enableControl('play', true);
              MusicControl.enableControl('pause', true);
+             MusicControl.enableControl('stop', true);
              MusicControl.enableControl('nextTrack', true);
              MusicControl.enableControl('previousTrack', true);
-             MusicControl.enableControl('togglePlayPause', true); // Bouton unique
+             MusicControl.enableControl('seekForward', true); // Certains casques utilisent ceci
+             MusicControl.enableControl('seekBackward', true);
+             MusicControl.enableControl('skipForward', true);
+             MusicControl.enableControl('skipBackward', true);
+             MusicControl.enableControl('togglePlayPause', true);
              
              // Empêche le système de tuer le service
-             MusicControl.enableControl('stop', false);
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
 
-             // Gestion du Focus Audio (Interruption par GPS/Appel)
+             // Gestion du Focus Audio
              MusicControl.handleAudioInterruptions(true);
 
              this.updateNotification('En attente...');
 
-             const toggle = () => { this.toggleVox(); }; 
+             // 2. FONCTION DE BASCULE SÉCURISÉE (DEBOUNCE)
+             // Empêche le double déclenchement si le casque envoie "Pause" puis "Play"
+             const safeToggle = () => { 
+                 const now = Date.now();
+                 if (now - this.lastToggleTime > 500) { // 500ms de délai minimum
+                     this.toggleVox(); 
+                     this.lastToggleTime = now;
+                 }
+             }; 
              
-             // Mapping Multi-Boutons -> Même Action (Switch VOX/PTT)
-             MusicControl.on(Command.nextTrack, toggle);
-             MusicControl.on(Command.previousTrack, toggle);
-             MusicControl.on(Command.play, toggle);
-             MusicControl.on(Command.pause, toggle);
-             MusicControl.on(Command.togglePlayPause, toggle);
+             // 3. MAPPING ABSOLU DE TOUS LES ÉVÉNEMENTS
+             MusicControl.on(Command.play, safeToggle);
+             MusicControl.on(Command.pause, safeToggle);
+             MusicControl.on(Command.stop, safeToggle);
+             MusicControl.on(Command.nextTrack, safeToggle);
+             MusicControl.on(Command.previousTrack, safeToggle);
+             MusicControl.on(Command.seekForward, safeToggle);
+             MusicControl.on(Command.seekBackward, safeToggle);
+             MusicControl.on(Command.skipForward, safeToggle);
+             MusicControl.on(Command.skipBackward, safeToggle);
+             MusicControl.on(Command.togglePlayPause, safeToggle);
           }
       } catch (e) { }
 
@@ -79,7 +99,7 @@ class AudioService {
           };
       } catch (e) { }
 
-      // --- SETUP VOLUME TRIGGER (BACKUP) ---
+      // --- SETUP VOLUME TRIGGER (DOUBLE CLIC) ---
       try {
           const vol = await VolumeManager.getVolume();
           this.lastVolume = typeof vol === 'number' ? vol : 0.5;
@@ -87,10 +107,19 @@ class AudioService {
           VolumeManager.addVolumeListener((result) => {
               const currentVol = result.volume;
               const now = Date.now();
+
+              // Détection Hausse Volume (y compris si déjà au max)
               if (currentVol > this.lastVolume || (currentVol === 1 && this.lastVolume === 1)) {
+                  // Si clic rapide (<600ms) = DOUBLE CLIC
                   if (now - this.lastVolumeUpTime < 600) {
-                      this.toggleVox(); 
-                      this.lastVolumeUpTime = 0; 
+                      // On utilise aussi le safeToggle logic ici manuellement
+                      if (now - this.lastToggleTime > 500) {
+                          this.toggleVox(); 
+                          this.lastToggleTime = now;
+                      }
+                      this.lastVolumeUpTime = 0; // Reset pour éviter triple clic
+                      
+                      // Remise à niveau du volume (Feedback tactile : le volume reste à fond)
                       setTimeout(() => VolumeManager.setVolume(1.0), 100);
                   } else {
                       this.lastVolumeUpTime = now;
@@ -113,21 +142,18 @@ class AudioService {
       const voxStateText = this.mode === 'vox' ? 'VOX ACTIF' : 'PTT (Manuel)';
       const color = this.mode === 'vox' ? 0xFFef4444 : 0xFF3b82f6;
 
-      // Configuration agressive pour le background
       MusicControl.setNowPlaying({
           title: `Salon #${this.currentRoomId}`,
           artist: `ComTac : ${voxStateText}`,
-          album: 'Utilisez Suivant/Précédent', 
+          album: 'Appuyez sur un bouton pour changer', 
           duration: 0, 
           color: color,
-          // CRITIQUE : Toujours dire "Playing" au système pour garder le CPU/Events actifs
-          // même si on ne joue pas de son réel (le stream webrtc est géré à part)
+          // CRITIQUE : Toujours "Playing" pour capturer les événements Bluetooth
           isPlaying: true, 
           isSeekable: false,
           notificationIcon: 'icon' 
       });
       
-      // Force la mise à jour de l'état de lecture
       MusicControl.updatePlayback({
           state: MusicControl.STATE_PLAYING,
           elapsedTime: 0
@@ -154,14 +180,16 @@ class AudioService {
   }
 
   toggleVox() {
+    // 1. Bascule du mode
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // Si on passe en PTT, on COUPE le micro immédiatement
+    // 2. Si on repasse en PTT, sécurité absolue : on coupe le micro
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
 
+    // 3. Mise à jour Notification et UI
     this.updateNotification();
     return this.mode === 'vox';
   }
