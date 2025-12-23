@@ -1,8 +1,13 @@
-const { withAndroidManifest, withMainActivity, withDangerousMod } = require('@expo/config-plugins');
+const { withAndroidManifest, withMainActivity, withDangerousMod, withStringsXml } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
+  // ORDRE D'EXÉCUTION CRITIQUE :
+  // 1. On répare MusicControl (Service Média)
+  // 2. On injecte le code KeyEvent dans MainActivity (Lien JS)
+  // 3. On patche le build.gradle de la lib KeyEvent (Compatibilité Java 17)
+  // 4. On génère le Service d'Accessibilité (Fichiers Java + XML + Manifest)
   return withAccessibilityService(
     withKeyEventBuildGradleFix(
       withKeyEventInjection(
@@ -44,6 +49,7 @@ module.exports = function(config) {
               "android.permission.BLUETOOTH",
               "android.permission.BLUETOOTH_CONNECT",
               "android.permission.MODIFY_AUDIO_SETTINGS",
+              // La permission magique pour apparaître dans les réglages :
               "android.permission.BIND_ACCESSIBILITY_SERVICE"
             ]
           },
@@ -72,9 +78,9 @@ module.exports = function(config) {
   );
 };
 
-// --- PLUGIN 1 : SERVICE D'ACCESSIBILITÉ (Génération Java + XML) ---
+// --- PLUGIN 1 : GÉNÉRATION DU SERVICE D'ACCESSIBILITÉ ---
 function withAccessibilityService(config) {
-  // 1. XML Config
+  // A. Création du fichier XML de configuration du service
   config = withDangerousMod(config, [
     'android',
     async (config) => {
@@ -95,23 +101,16 @@ function withAccessibilityService(config) {
     }
   ]);
 
-  // 2. Strings
-  config = withDangerousMod(config, [
-    'android',
-    async (config) => {
-        const stringsPath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/res/values/strings.xml');
-        if (fs.existsSync(stringsPath)) {
-            let strings = fs.readFileSync(stringsPath, 'utf8');
-            if (!strings.includes('accessibility_service_description')) {
-                strings = strings.replace('</resources>', '    <string name="accessibility_service_description">ComTac Hardware Control (PTT/VOX)</string>\n</resources>');
-                fs.writeFileSync(stringsPath, strings);
-            }
-        }
-        return config;
-    }
-  ]);
+  // B. Ajout de la description dans strings.xml
+  config = withStringsXml(config, config => {
+      if(!config.modResults.resources.string) config.modResults.resources.string = [];
+      if (!config.modResults.resources.string.find(s => s.$.name === "accessibility_service_description")) {
+          config.modResults.resources.string.push({ $: { name: "accessibility_service_description" }, _: "ComTac Hardware Control (PTT/VOX)" });
+      }
+      return config;
+  });
 
-  // 3. Java Service Code
+  // C. Génération du fichier Java (Le Service)
   config = withDangerousMod(config, [
     'android',
     async (config) => {
@@ -138,7 +137,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
         int keyCode = event.getKeyCode();
 
         if (action == KeyEvent.ACTION_DOWN) {
-            // Liste des touches qui déclenchent le PTT/VOX
+            // Liste des touches interceptées
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
                 keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
@@ -147,18 +146,18 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
                 
+                // Envoi d'un Broadcast à l'application principale
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
                 
-                // On consomme l'événement SEULEMENT pour Volume UP (pour éviter que le son monte)
+                // On 'mange' le Volume UP pour éviter que le son ne monte
                 if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
                     return true; 
                 }
             }
-            // IMPORTANT : On ne retourne PAS 'true' pour Volume DOWN
-            // Cela permet au système de baisser le son normalement.
         }
+        // On laisse passer tout le reste (y compris Volume Down)
         return super.onKeyEvent(event);
     }
 }`;
@@ -167,7 +166,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
     }
   ]);
 
-  // 4. Manifest
+  // D. Déclaration dans le Manifest
   config = withAndroidManifest(config, async (config) => {
       const manifest = config.modResults;
       const app = manifest.manifest.application[0];
@@ -194,13 +193,13 @@ public class ComTacAccessibilityService extends AccessibilityService {
       return config;
   });
 
-  // 5. MainActivity Link (Kotlin)
+  // E. Modification MainActivity (Kotlin) pour recevoir le Broadcast
   config = withMainActivity(config, async (config) => {
       let src = config.modResults.contents;
       const isKotlin = src.includes('class MainActivity : ReactActivity');
 
       if (isKotlin) {
-          // CORRECTION IMPORT: Pas de Build ici pour éviter le conflit
+          // Imports nécessaires
           if (!src.includes('BroadcastReceiver')) {
               src = src.replace('import android.os.Bundle', 
 `import android.os.Bundle
@@ -211,12 +210,14 @@ import android.content.IntentFilter
 import com.github.kevinejohn.keyevent.KeyEventModule`);
           }
 
+          // Ajout du Receiver
           if (!src.includes('comTacReceiver')) {
               const receiverCode = `
   private val comTacReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
       if ("COMTAC_HARDWARE_EVENT" == intent.action) {
         val keyCode = intent.getIntExtra("keyCode", 0)
+        // Injection directe dans le module React Native
         KeyEventModule.getInstance().onKeyDownEvent(keyCode, null)
       }
     }
@@ -225,9 +226,10 @@ import com.github.kevinejohn.keyevent.KeyEventModule`);
               const classEnd = src.lastIndexOf('}');
               src = src.substring(0, classEnd) + receiverCode + src.substring(classEnd);
 
+              // Enregistrement dans onCreate
               const onCreateHook = 'super.onCreate(null)';
               if (src.includes(onCreateHook)) {
-                  // UTILISATION DE android.os.Build.VERSION.SDK_INT (NOM COMPLET)
+                  // Utilisation du nom complet android.os.Build pour éviter conflit d'import
                   const registerCode = `
     val filter = IntentFilter("COMTAC_HARDWARE_EVENT")
     if (android.os.Build.VERSION.SDK_INT >= 34) {
@@ -247,7 +249,7 @@ import com.github.kevinejohn.keyevent.KeyEventModule`);
   return config;
 }
 
-// --- PLUGIN 2 : Patch Build Gradle (Compatibilité) ---
+// --- PLUGIN 2 : Patch Build Gradle (Compatibilité Compilation) ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
@@ -255,10 +257,12 @@ function withKeyEventBuildGradleFix(config) {
       const file = path.join(config.modRequest.projectRoot, 'node_modules', 'react-native-keyevent', 'android', 'build.gradle');
       if (fs.existsSync(file)) {
         let contents = fs.readFileSync(file, 'utf8');
+        // On remplace brutalement les versions obsolètes
         contents = contents.replace(/compileSdkVersion\s+.*$/gm, 'compileSdkVersion 34');
         contents = contents.replace(/buildToolsVersion\s+.*$/gm, 'buildToolsVersion "34.0.0"');
         contents = contents.replace(/targetSdkVersion\s+.*$/gm, 'targetSdkVersion 33');
         contents = contents.replace(/minSdkVersion\s+.*$/gm, 'minSdkVersion 24');
+        
         if (!contents.includes('compileOptions')) {
             contents = contents.replace(/android\s*{/, `android {
     compileOptions {
@@ -273,7 +277,7 @@ function withKeyEventBuildGradleFix(config) {
   ]);
 }
 
-// --- PLUGIN 3 : Injection KeyEvent (Fallback) ---
+// --- PLUGIN 3 : Injection KeyEvent (Fallback + Structure) ---
 function withKeyEventInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -292,7 +296,7 @@ function withKeyEventInjection(config) {
         const lastBraceIndex = src.lastIndexOf('}');
         src = src.substring(0, lastBraceIndex) + dispatchCode + src.substring(lastBraceIndex);
         
-        // Ajout des imports manquants pour cette fonction si besoin
+        // Ajout import KeyEvent si manquant
         if (!src.includes('import android.view.KeyEvent')) {
              src = src.replace('import android.os.Bundle', 'import android.os.Bundle\nimport android.view.KeyEvent');
         }
@@ -307,11 +311,17 @@ function withMusicControlFix(config) {
   return withAndroidManifest(config, async (config) => {
     const androidManifest = config.modResults;
     const mainApplication = androidManifest.manifest.application[0];
+
+    mainApplication['service'] = mainApplication['service'] || [];
     const serviceName = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotification';
-    if (!mainApplication['service']?.some(s => s.$['android:name'] === serviceName)) {
-      mainApplication['service'] = mainApplication['service'] || [];
+    
+    if (!mainApplication['service'].some(s => s.$['android:name'] === serviceName)) {
       mainApplication['service'].push({
-        $: { 'android:name': serviceName, 'android:exported': 'true', 'android:foregroundServiceType': 'mediaPlayback' }
+        $: { 
+            'android:name': serviceName,
+            'android:exported': 'true',
+            'android:foregroundServiceType': 'mediaPlayback'
+        }
       });
     }
     return config;
