@@ -21,7 +21,6 @@ import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
-// IMPORT DU NOUVEAU COMPOSANT
 import PrivacyConsentModal from './components/PrivacyConsentModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -61,7 +60,6 @@ const App: React.FC = () => {
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
   const [privatePeerId, setPrivatePeerId] = useState<string | null>(null);
 
-  // État pour savoir si le consentement est validé
   const [hasConsent, setHasConsent] = useState(false);
 
   const peerRef = useRef<Peer | null>(null);
@@ -69,14 +67,13 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  // ABONNEMENT DIRECT AUX CHANGEMENTS AUDIO (Remplace le setInterval)
   useEffect(() => {
-      const interval = setInterval(() => {
-          if (audioService.mode === 'vox' !== voxActive) {
-              setVoxActive(audioService.mode === 'vox');
-          }
-      }, 500);
-      return () => clearInterval(interval);
-  }, [voxActive]);
+      const unsubscribe = audioService.subscribe((mode) => {
+          setVoxActive(mode === 'vox');
+      });
+      return unsubscribe;
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
@@ -326,7 +323,6 @@ const App: React.FC = () => {
   }, [user, handleData, showToast, hostId, view]);
 
   const startServices = async () => {
-    // SÉCURITÉ : On attend le consentement avant de lancer les services
     if (!hasConsent) return;
 
     await audioService.init();
@@ -367,7 +363,6 @@ const App: React.FC = () => {
     );
   };
 
-  // Lorsque le consentement est donné, on lance les services si l'utilisateur est déjà connecté
   useEffect(() => {
       if (hasConsent && user.callsign) {
           startServices();
@@ -379,7 +374,6 @@ const App: React.FC = () => {
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
     
-    // On met à jour l'utilisateur mais on attend le consentement pour startServices
     setUser(prev => ({ ...prev, callsign: tri }));
     
     if (hasConsent) {
@@ -598,7 +592,6 @@ const App: React.FC = () => {
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
       
-      {/* Ajout du gestionnaire de consentement - S'affiche en premier si besoin */}
       <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
 
       {view === 'login' ? renderLogin() :
