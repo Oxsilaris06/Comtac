@@ -15,13 +15,13 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Magnetometer } from 'expo-sensors';
+import NetInfo from '@react-native-community/netinfo'; // AJOUT CRITIQUE
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
-// IMPORT MODALE DE CONSENTEMENT
 import PrivacyConsentModal from './components/PrivacyConsentModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -38,7 +38,6 @@ const App: React.FC = () => {
   });
 
   const [view, setView] = useState<ViewType>('login');
-  // Peers stocke tous les connectés. La clé est l'ID PeerJS.
   const [peers, setPeers] = useState<Record<string, UserData>>({});
   const [pings, setPings] = useState<PingData[]>([]);
   const [bannedPeers, setBannedPeers] = useState<string[]>([]);
@@ -58,22 +57,45 @@ const App: React.FC = () => {
   const [showQRModal, setShowQRModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPingModal, setShowPingModal] = useState(false);
-  
-  // Selection pour Modale Action
   const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(null);
-  
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
   const [privatePeerId, setPrivatePeerId] = useState<string | null>(null);
 
-  // ETAT CONSENTEMENT (Bloque les services tant que false)
   const [hasConsent, setHasConsent] = useState(false);
+  const [isOffline, setIsOffline] = useState(false); // État réseau
 
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<Record<string, any>>({});
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // ABONNEMENT AUDIO TEMPS RÉEL (Remplace le polling)
+  // --- RECONNEXION MILSPEC ---
+  useEffect(() => {
+    // Surveillance réseau
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const offline = !state.isConnected || !state.isInternetReachable;
+      
+      // Si on passe de Offline à Online et qu'on était connecté
+      if (isOffline && !offline && view !== 'login' && hostId) {
+          console.log("[NETWORK] Reconnexion détectée. Reboot PeerJS...");
+          showToast("Réseau retrouvé. Reconnexion...", "info");
+          
+          // On attend 2s que l'interface réseau soit stable
+          setTimeout(() => {
+              // On garde le même ID si possible (Hôte) ou on se reconnecte au chef
+              if (user.role === OperatorRole.HOST) {
+                  initPeer(OperatorRole.HOST); // Reboot Host
+              } else {
+                  initPeer(OperatorRole.OPR, hostId); // Reconnect to Host
+              }
+          }, 2000);
+      }
+      setIsOffline(!!offline);
+    });
+    return unsubscribe;
+  }, [isOffline, view, hostId, user.role]);
+
+  // Reste du code inchangé...
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -81,21 +103,18 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
-  // CHARGEMENT MEMOIRE TRIGRAMME
   useEffect(() => {
     AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
       if (saved) setLoginInput(saved);
     });
   }, []);
 
-  // BATTERIE
   useEffect(() => {
     Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) })));
     const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) })));
     return () => sub && sub.remove();
   }, []);
 
-  // BOUSSOLE / MAGNETOMETRE
   useEffect(() => {
     Magnetometer.setUpdateInterval(100);
     const subscription = Magnetometer.addListener((data) => {
@@ -103,7 +122,6 @@ const App: React.FC = () => {
       angle = angle - 90; 
       if (angle < 0) angle = 360 + angle;
       setUser(prev => {
-          // Mise à jour fluide uniquement si changement significatif
           if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) };
           return prev;
       });
@@ -111,13 +129,11 @@ const App: React.FC = () => {
     return () => subscription && subscription.remove();
   }, []);
 
-  // GESTION RETOUR ARRIERE ANDROID
   useEffect(() => {
     const backAction = () => {
       if (selectedOperatorId) { setSelectedOperatorId(null); return true; }
       if (showQRModal) { setShowQRModal(false); return true; }
       if (showScanner) { setShowScanner(false); return true; }
-      
       if (view === 'ops' || view === 'map') {
         Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]);
         return true;
@@ -150,16 +166,13 @@ const App: React.FC = () => {
     Object.values(connectionsRef.current).forEach((conn: any) => { if (conn.open) conn.send(data); });
   }, [user.id]);
 
-  // --- LOGIQUE CRITIQUE DE FUSION (ANTI-DOUBLON) ---
   const mergePeer = useCallback((newPeer: UserData) => {
     setPeers(prev => {
         const next = { ...prev };
-        // Si le trigramme existe déjà sous un autre ID (ancienne session), on supprime l'ancien
         const oldId = Object.keys(next).find(key => 
             next[key].callsign === newPeer.callsign && key !== newPeer.id
         );
         if (oldId) delete next[oldId];
-        
         next[newPeer.id] = newPeer;
         return next;
     });
@@ -171,9 +184,7 @@ const App: React.FC = () => {
 
     switch (data.type) {
       case 'UPDATE': case 'FULL': case 'UPDATE_USER':
-        if (data.user && data.user.id !== user.id) {
-             mergePeer(data.user);
-        }
+        if (data.user && data.user.id !== user.id) mergePeer(data.user);
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
@@ -237,7 +248,6 @@ const App: React.FC = () => {
       setBannedPeers(prev => [...prev, targetId]);
       if (conn) conn.close();
       delete connectionsRef.current[targetId];
-      // Suppression immédiate de la liste locale
       setPeers(prev => { const next = {...prev}; delete next[targetId]; return next; });
       setSelectedOperatorId(null);
       showToast("Utilisateur Banni");
@@ -254,16 +264,12 @@ const App: React.FC = () => {
       setSelectedOperatorId(null);
   };
 
-  // --- MIGRATION D'HÔTE (Préservée) ---
   const handleHostDisconnect = () => {
       if (user.role === OperatorRole.HOST) return;
       showToast("CONNEXION PERDUE - MIGRATION...", "error");
-      
       const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
       candidates.push(user);
-      // Tri par ancienneté pour élire le chef
       candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-      
       const newHost = candidates[0];
       if (newHost && newHost.id === user.id) {
           promoteToHost();
@@ -319,11 +325,7 @@ const App: React.FC = () => {
       call.on('stream', (rs) => audioService.playStream(rs));
     });
     
-    p.on('error', (err) => { 
-        if (err.type === 'peer-unavailable' || err.type === 'network') {
-            // Géré par handleHostDisconnect si c'était l'hôte
-        }
-    });
+    p.on('error', (err) => { if (err.type === 'peer-unavailable' || err.type === 'network') {} });
   }, [peers, user, handleData, showToast, silenceMode, pings, bannedPeers]);
 
   const connectToHost = useCallback((targetId: string) => {
@@ -349,7 +351,6 @@ const App: React.FC = () => {
   }, [user, handleData, showToast, hostId, view]);
 
   const startServices = async () => {
-    // SÉCURITÉ : On attend le consentement avant de lancer les services
     if (!hasConsent) return;
 
     await audioService.init();
@@ -374,8 +375,6 @@ const App: React.FC = () => {
       { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
       (loc) => {
         const { latitude, longitude, speed, heading, accuracy } = loc.coords;
-        
-        // FIX: Filtre Ghost GPS (Précision > 30m ignorée)
         if (accuracy && accuracy > 30) return;
 
         setUser(prev => {
@@ -392,7 +391,6 @@ const App: React.FC = () => {
     );
   };
 
-  // Lorsque le consentement est donné, on lance les services si l'utilisateur est déjà connecté
   useEffect(() => {
       if (hasConsent && user.callsign) {
           startServices();
@@ -406,7 +404,6 @@ const App: React.FC = () => {
     
     setUser(prev => ({ ...prev, callsign: tri }));
     
-    // Si consentement déjà OK, on démarre
     if (hasConsent) {
         await startServices();
     }
@@ -477,153 +474,148 @@ const App: React.FC = () => {
     </SafeAreaView>
   );
 
-  const renderDashboard = () => {
-    const filteredPeers = Object.values(peers).filter(p => p.id !== user.id);
-    const totalOperators = 1 + filteredPeers.length;
-    const cardWidth = totalOperators === 1 ? '100%' : '48%';
-
-    return (
-        <View style={{flex: 1}}>
-        <View style={{backgroundColor: '#09090b'}}>
-            <SafeAreaView style={styles.header}>
-                <View style={styles.headerContent}>
-                <TouchableOpacity onPress={() => setView('menu')} style={{padding: 8, marginRight: 10}}>
-                    <MaterialIcons name="arrow-back" size={24} color="#a1a1aa" />
-                </TouchableOpacity>
-                <View style={{flexDirection: 'row', alignItems: 'center', flex: 1}}>
-                    <MaterialIcons name="satellite" size={20} color="#3b82f6" />
-                    <Text style={styles.headerTitle}> COM<Text style={{color: '#3b82f6'}}>TAC</Text></Text>
-                </View>
-                <TouchableOpacity onPress={() => setView(view === 'map' ? 'ops' : 'map')} style={[styles.navBtn, view === 'map' ? styles.navBtnActive : null]}>
-                    <MaterialIcons name="map" size={16} color={view === 'map' ? 'white' : '#a1a1aa'} />
-                    <Text style={[styles.navBtnText, view === 'map' ? {color:'white'} : null]}>MAP</Text>
-                </TouchableOpacity>
-                </View>
-            </SafeAreaView>
-            {silenceMode && (<View style={styles.silenceBanner}><Text style={styles.silenceText}>SILENCE RADIO</Text></View>)}
-            {privatePeerId && (<View style={[styles.silenceBanner, {backgroundColor: '#a855f7'}]}><Text style={styles.silenceText}>CANAL PRIVÉ ACTIF</Text></View>)}
-        </View>
-
-        <View style={styles.mainContent}>
-            {view === 'ops' ? (
-                <ScrollView contentContainerStyle={styles.grid}>
-                    <OperatorCard user={user} isMe style={{ width: cardWidth }} />
-                    {filteredPeers.map(p => (
-                        <TouchableOpacity 
-                            key={p.id} 
-                            onLongPress={() => setSelectedOperatorId(p.id)} 
-                            activeOpacity={0.8}
-                            style={{ width: cardWidth, marginBottom: 10 }}
-                        >
-                            <OperatorCard user={p} me={user} style={{ width: '100%' }} />
-                        </TouchableOpacity>
-                    ))}
-                </ScrollView>
-            ) : (
-            <View style={{flex: 1}}>
-                <TacticalMap 
-                me={user} peers={peers} pings={pings} 
-                mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
-                showPings={showPings} isHost={user.role === OperatorRole.HOST}
-                onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
-                onPingMove={(p) => { 
-                    setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
-                    broadcast({ type: 'PING_MOVE', id: p.id, lat: p.lat, lng: p.lng }); 
-                }}
-                onPingDelete={(id) => {
-                    setPings(prev => prev.filter(p => p.id !== id));
-                    broadcast({ type: 'PING_DELETE', id: id });
-                }}
-                />
-                <View style={styles.mapControls}>
-                    <TouchableOpacity onPress={() => setMapMode(m => m === 'dark' ? 'light' : m === 'light' ? 'satellite' : 'dark')} style={styles.mapBtn}>
-                        <MaterialIcons name={mapMode === 'dark' ? 'dark-mode' : mapMode === 'light' ? 'light-mode' : 'satellite'} size={24} color="#d4d4d8" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
-                        <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setShowPings(!showPings)} style={styles.mapBtn}>
-                        <MaterialIcons name={showPings ? 'location-on' : 'location-off'} size={24} color="#d4d4d8" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setIsPingMode(!isPingMode)} style={[styles.mapBtn, isPingMode ? {backgroundColor: '#dc2626', borderColor: '#f87171'} : null]}>
-                        <MaterialIcons name="ads-click" size={24} color="white" />
-                    </TouchableOpacity>
-                </View>
+  const renderDashboard = () => (
+    <View style={{flex: 1}}>
+      <View style={{backgroundColor: '#09090b'}}>
+          <SafeAreaView style={styles.header}>
+            <View style={styles.headerContent}>
+              <TouchableOpacity onPress={() => setView('menu')} style={{padding: 8, marginRight: 10}}>
+                  <MaterialIcons name="arrow-back" size={24} color="#a1a1aa" />
+              </TouchableOpacity>
+              <View style={{flexDirection: 'row', alignItems: 'center', flex: 1}}>
+                <MaterialIcons name="satellite" size={20} color="#3b82f6" />
+                <Text style={styles.headerTitle}> COM<Text style={{color: '#3b82f6'}}>TAC</Text></Text>
+              </View>
+              <TouchableOpacity onPress={() => setView(view === 'map' ? 'ops' : 'map')} style={[styles.navBtn, view === 'map' ? styles.navBtnActive : null]}>
+                <MaterialIcons name="map" size={16} color={view === 'map' ? 'white' : '#a1a1aa'} />
+                <Text style={[styles.navBtnText, view === 'map' ? {color:'white'} : null]}>MAP</Text>
+              </TouchableOpacity>
             </View>
+          </SafeAreaView>
+          {silenceMode && (<View style={styles.silenceBanner}><Text style={styles.silenceText}>SILENCE RADIO</Text></View>)}
+          {privatePeerId && (<View style={[styles.silenceBanner, {backgroundColor: '#a855f7'}]}><Text style={styles.silenceText}>CANAL PRIVÉ ACTIF</Text></View>)}
+          {/* Alerte Réseau */}
+          {isOffline && (<View style={[styles.silenceBanner, {backgroundColor: '#ef4444'}]}><Text style={styles.silenceText}>CONNEXION PERDUE - RECONNEXION...</Text></View>)}
+      </View>
+
+      <View style={styles.mainContent}>
+        {view === 'ops' ? (
+          <ScrollView contentContainerStyle={styles.grid}>
+             <OperatorCard user={user} isMe style={{ width: '100%' }} />
+             {Object.values(peers).filter(p => p.id !== user.id).map(p => (
+                 <TouchableOpacity 
+                    key={p.id} 
+                    onLongPress={() => setSelectedOperatorId(p.id)} 
+                    activeOpacity={0.8}
+                    style={{ width: '48%', marginBottom: 10 }}
+                 >
+                    <OperatorCard user={p} me={user} style={{ width: '100%' }} />
+                 </TouchableOpacity>
+             ))}
+          </ScrollView>
+        ) : (
+          <View style={{flex: 1}}>
+            <TacticalMap 
+              me={user} peers={peers} pings={pings} 
+              mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
+              showPings={showPings} isHost={user.role === OperatorRole.HOST}
+              onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
+              onPingMove={(p) => { 
+                setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
+                broadcast({ type: 'PING_MOVE', id: p.id, lat: p.lat, lng: p.lng }); 
+              }}
+              onPingDelete={(id) => {
+                setPings(prev => prev.filter(p => p.id !== id));
+                broadcast({ type: 'PING_DELETE', id: id });
+              }}
+            />
+            <View style={styles.mapControls}>
+                <TouchableOpacity onPress={() => setMapMode(m => m === 'dark' ? 'light' : m === 'light' ? 'satellite' : 'dark')} style={styles.mapBtn}>
+                    <MaterialIcons name={mapMode === 'dark' ? 'dark-mode' : mapMode === 'light' ? 'light-mode' : 'satellite'} size={24} color="#d4d4d8" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setShowTrails(!showTrails)} style={styles.mapBtn}>
+                    <MaterialIcons name={showTrails ? 'visibility' : 'visibility-off'} size={24} color="#d4d4d8" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setShowPings(!showPings)} style={styles.mapBtn}>
+                    <MaterialIcons name={showPings ? 'location-on' : 'location-off'} size={24} color="#d4d4d8" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setIsPingMode(!isPingMode)} style={[styles.mapBtn, isPingMode ? {backgroundColor: '#dc2626', borderColor: '#f87171'} : null]}>
+                    <MaterialIcons name="ads-click" size={24} color="white" />
+                </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.footer}>
+        <View style={styles.statusRow}>
+            {user.role === OperatorRole.HOST ? (
+               <TouchableOpacity 
+                  onPress={() => { const ns = !silenceMode; setSilenceMode(ns); broadcast({ type: 'SILENCE', state: ns }); if(ns) {setVoxActive(false); audioService.setTx(false);} }}
+                  style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444'} : {borderColor: '#ef4444'}]}
+               >
+                   <Text style={[styles.statusBtnText, silenceMode ? {color:'white'} : {color: '#ef4444'}]}>SILENCE</Text>
+               </TouchableOpacity>
+            ) : null}
+            {privatePeerId && (
+                <TouchableOpacity onPress={() => { const conn = connectionsRef.current[privatePeerId]; if(conn) conn.send({type: 'PRIVATE_END'}); leavePrivateMode(); }} style={[styles.statusBtn, {borderColor: '#a855f7'}]}>
+                    <Text style={[styles.statusBtnText, {color: '#a855f7'}]}>QUITTER PRIVÉ</Text>
+                </TouchableOpacity>
             )}
-        </View>
-
-        <View style={styles.footer}>
-            <View style={styles.statusRow}>
-                {user.role === OperatorRole.HOST ? (
+            {!privatePeerId && [OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
                 <TouchableOpacity 
-                    onPress={() => { const ns = !silenceMode; setSilenceMode(ns); broadcast({ type: 'SILENCE', state: ns }); if(ns) {setVoxActive(false); audioService.setTx(false);} }}
-                    style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444'} : {borderColor: '#ef4444'}]}
+                    key={s} 
+                    onPress={() => {
+                        setUser(prev => {
+                            const updated = { ...prev, status: s };
+                            broadcast({ type: 'UPDATE', user: updated });
+                            return updated;
+                        });
+                    }}
+                    style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}
                 >
-                    <Text style={[styles.statusBtnText, silenceMode ? {color:'white'} : {color: '#ef4444'}]}>SILENCE</Text>
+                    <Text style={[styles.statusBtnText, user.status === s ? {color:'white'} : null]}>{s}</Text>
                 </TouchableOpacity>
-                ) : null}
-                {privatePeerId && (
-                    <TouchableOpacity onPress={() => { const conn = connectionsRef.current[privatePeerId]; if(conn) conn.send({type: 'PRIVATE_END'}); leavePrivateMode(); }} style={[styles.statusBtn, {borderColor: '#a855f7'}]}>
-                        <Text style={[styles.statusBtnText, {color: '#a855f7'}]}>QUITTER PRIVÉ</Text>
-                    </TouchableOpacity>
-                )}
-                {!privatePeerId && [OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
-                    <TouchableOpacity 
-                        key={s} 
-                        onPress={() => {
-                            setUser(prev => {
-                                const updated = { ...prev, status: s };
-                                broadcast({ type: 'UPDATE', user: updated });
-                                return updated;
-                            });
-                        }}
-                        style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}
-                    >
-                        <Text style={[styles.statusBtnText, user.status === s ? {color:'white'} : null]}>{s}</Text>
-                    </TouchableOpacity>
-                ))}
-            </View>
-            <View style={styles.controlsRow}>
-                <TouchableOpacity onPress={() => { const newVox = audioService.toggleVox(); setVoxActive(newVox); }} style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}>
-                    <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
-                </TouchableOpacity>
-                <TouchableOpacity 
-                    onPressIn={() => { 
-                        if(silenceMode && user.role !== OperatorRole.HOST) return; 
-                        if(!voxActive) { 
-                            if (user.role !== OperatorRole.HOST) audioService.muteIncoming(true);
-                            audioService.setTx(true); 
-                            setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); 
-                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
-                        }
-                    }} 
-                    onPressOut={() => { 
-                        if(!voxActive) { 
-                            audioService.setTx(false); 
-                            if (user.role !== OperatorRole.HOST) audioService.muteIncoming(false);
-                            setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); 
-                        }
-                    }} 
-                    style={[styles.pttBtn, user.isTx ? {backgroundColor: '#2563eb'} : null, silenceMode && user.role !== OperatorRole.HOST ? {opacity:0.5} : null]}
-                    disabled={silenceMode && user.role !== OperatorRole.HOST}
-                >
-                    <MaterialIcons name="mic" size={40} color={user.isTx ? 'white' : '#3f3f46'} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setShowQRModal(true)} style={styles.qrBtn}>
-                    <MaterialIcons name="qr-code-2" size={24} color="#d4d4d8" />
-                </TouchableOpacity>
-            </View>
+            ))}
         </View>
+        <View style={styles.controlsRow}>
+            <TouchableOpacity onPress={() => { const newVox = audioService.toggleVox(); setVoxActive(newVox); }} style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}>
+                <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
+            </TouchableOpacity>
+            <TouchableOpacity 
+                onPressIn={() => { 
+                    if(silenceMode && user.role !== OperatorRole.HOST) return; 
+                    if(!voxActive) { 
+                        if (user.role !== OperatorRole.HOST) audioService.muteIncoming(true);
+                        audioService.setTx(true); 
+                        setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); 
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
+                    }
+                }} 
+                onPressOut={() => { 
+                    if(!voxActive) { 
+                        audioService.setTx(false); 
+                        if (user.role !== OperatorRole.HOST) audioService.muteIncoming(false);
+                        setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); 
+                    }
+                }} 
+                style={[styles.pttBtn, user.isTx ? {backgroundColor: '#2563eb'} : null, silenceMode && user.role !== OperatorRole.HOST ? {opacity:0.5} : null]}
+                disabled={silenceMode && user.role !== OperatorRole.HOST}
+            >
+                <MaterialIcons name="mic" size={40} color={user.isTx ? 'white' : '#3f3f46'} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowQRModal(true)} style={styles.qrBtn}>
+                <MaterialIcons name="qr-code-2" size={24} color="#d4d4d8" />
+            </TouchableOpacity>
         </View>
-    );
-  };
+      </View>
+    </View>
+  );
 
   return (
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
       
-      {/* Modale affichée conditionnellement si le composant est valide */}
       {PrivacyConsentModal ? (
         <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
       ) : null}
@@ -632,6 +624,7 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
+      {/* --- MODALES --- */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
