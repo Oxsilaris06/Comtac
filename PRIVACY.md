@@ -1,6 +1,6 @@
 Politique de Confidentialité - ComTac
 
-Dernière mise à jour : 23/12/2025
+Dernière mise à jour : [23/12/2025]
 
 L'application ComTac ("l'Application") accorde une importance primordiale à la confidentialité de ses utilisateurs, notamment dans le cadre d'opérations tactiques et de simulation. Cette politique détaille comment nous traitons vos données, en conformité avec le Règlement Général sur la Protection des Données (RGPD).
 
