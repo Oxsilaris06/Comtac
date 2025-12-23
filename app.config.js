@@ -1,9 +1,8 @@
-const { withAndroidManifest, withMainActivity, withDangerousMod, withProjectBuildGradle, withStringsXml } = require('@expo/config-plugins');
+const { withAndroidManifest, withMainActivity, withDangerousMod } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
-  // On empile les plugins : Accessibilité -> Patch Gradle -> Boutons -> Audio
   return withAccessibilityService(
     withKeyEventBuildGradleFix(
       withKeyEventInjection(
@@ -45,8 +44,7 @@ module.exports = function(config) {
               "android.permission.BLUETOOTH",
               "android.permission.BLUETOOTH_CONNECT",
               "android.permission.MODIFY_AUDIO_SETTINGS",
-              // Permission critique pour l'interception Hard
-              "android.permission.BIND_ACCESSIBILITY_SERVICE" 
+              "android.permission.BIND_ACCESSIBILITY_SERVICE"
             ]
           },
           plugins: [
@@ -74,16 +72,15 @@ module.exports = function(config) {
   );
 };
 
-// --- PLUGIN NUCLEAIRE : SERVICE D'ACCESSIBILITÉ ---
+// --- PLUGIN 1 : SERVICE D'ACCESSIBILITÉ (Génération Java + XML) ---
 function withAccessibilityService(config) {
-  // 1. Création du fichier XML de configuration du service
+  // 1. XML Config
   config = withDangerousMod(config, [
     'android',
     async (config) => {
         const resXmlPath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/res/xml');
         if (!fs.existsSync(resXmlPath)) fs.mkdirSync(resXmlPath, { recursive: true });
         
-        // Configuration : On demande à écouter TOUS les événements touches (flagRequestFilterKeyEvents)
         const xmlContent = `<?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeAllMask"
@@ -98,17 +95,23 @@ function withAccessibilityService(config) {
     }
   ]);
 
-  // 2. Ajout de la description visible par l'utilisateur dans les paramètres Android
-  config = withStringsXml(config, config => {
-      if(!config.modResults.resources.string) config.modResults.resources.string = [];
-      // On évite les doublons
-      if (!config.modResults.resources.string.find(s => s.$.name === "accessibility_service_description")) {
-          config.modResults.resources.string.push({ $: { name: "accessibility_service_description" }, _: "ComTac Hardware Control (PTT/VOX)" });
-      }
-      return config;
-  });
+  // 2. Strings
+  config = withDangerousMod(config, [
+    'android',
+    async (config) => {
+        const stringsPath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/res/values/strings.xml');
+        if (fs.existsSync(stringsPath)) {
+            let strings = fs.readFileSync(stringsPath, 'utf8');
+            if (!strings.includes('accessibility_service_description')) {
+                strings = strings.replace('</resources>', '    <string name="accessibility_service_description">ComTac Hardware Control (PTT/VOX)</string>\n</resources>');
+                fs.writeFileSync(stringsPath, strings);
+            }
+        }
+        return config;
+    }
+  ]);
 
-  // 3. Génération du fichier Java (Le cerveau du service)
+  // 3. Java Service Code
   config = withDangerousMod(config, [
     'android',
     async (config) => {
@@ -134,10 +137,8 @@ public class ComTacAccessibilityService extends AccessibilityService {
         int action = event.getAction();
         int keyCode = event.getKeyCode();
 
-        // On ne traite que l'appui (DOWN)
         if (action == KeyEvent.ACTION_DOWN) {
-            
-            // LISTE DES TOUCHES INTERCEPTÉES (Volume UP + Tout Bluetooth)
+            // Liste des touches qui déclenchent le PTT/VOX
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
                 keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
@@ -146,23 +147,17 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
                 
-                // On envoie le signal à l'application principale
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
                 
-                // ASTUCE PRO : On retourne 'true' pour le Volume UP
-                // Cela "consomme" l'événement : le volume du téléphone ne montera pas !
-                // C'est un vrai bouton PTT silencieux.
+                // On consomme l'événement SEULEMENT pour Volume UP (pour éviter que le son monte)
                 if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
                     return true; 
                 }
             }
-            
-            // ANTI-BUG : On bloque le Volume Down (retourne true = ne fait rien)
-            if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                return true; 
-            }
+            // IMPORTANT : On ne retourne PAS 'true' pour Volume DOWN
+            // Cela permet au système de baisser le son normalement.
         }
         return super.onKeyEvent(event);
     }
@@ -172,7 +167,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
     }
   ]);
 
-  // 4. Déclaration dans AndroidManifest.xml
+  // 4. Manifest
   config = withAndroidManifest(config, async (config) => {
       const manifest = config.modResults;
       const app = manifest.manifest.application[0];
@@ -199,13 +194,13 @@ public class ComTacAccessibilityService extends AccessibilityService {
       return config;
   });
 
-  // 5. Modification MainActivity (Kotlin) pour recevoir les ordres
+  // 5. MainActivity Link (Kotlin)
   config = withMainActivity(config, async (config) => {
       let src = config.modResults.contents;
       const isKotlin = src.includes('class MainActivity : ReactActivity');
 
       if (isKotlin) {
-          // Imports
+          // CORRECTION IMPORT: Pas de Build ici pour éviter le conflit
           if (!src.includes('BroadcastReceiver')) {
               src = src.replace('import android.os.Bundle', 
 `import android.os.Bundle
@@ -213,18 +208,15 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import com.github.kevinejohn.keyevent.KeyEventModule`);
           }
 
-          // Ajout du Receiver
           if (!src.includes('comTacReceiver')) {
               const receiverCode = `
   private val comTacReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
       if ("COMTAC_HARDWARE_EVENT" == intent.action) {
         val keyCode = intent.getIntExtra("keyCode", 0)
-        // On injecte directement dans le module JS existant !
         KeyEventModule.getInstance().onKeyDownEvent(keyCode, null)
       }
     }
@@ -233,12 +225,12 @@ import com.github.kevinejohn.keyevent.KeyEventModule`);
               const classEnd = src.lastIndexOf('}');
               src = src.substring(0, classEnd) + receiverCode + src.substring(classEnd);
 
-              // Enregistrement dans onCreate
               const onCreateHook = 'super.onCreate(null)';
               if (src.includes(onCreateHook)) {
+                  // UTILISATION DE android.os.Build.VERSION.SDK_INT (NOM COMPLET)
                   const registerCode = `
     val filter = IntentFilter("COMTAC_HARDWARE_EVENT")
-    if (Build.VERSION.SDK_INT >= 34) {
+    if (android.os.Build.VERSION.SDK_INT >= 34) {
         registerReceiver(comTacReceiver, filter, Context.RECEIVER_EXPORTED)
     } else {
         registerReceiver(comTacReceiver, filter)
@@ -255,8 +247,7 @@ import com.github.kevinejohn.keyevent.KeyEventModule`);
   return config;
 }
 
-// --- AUTRES PLUGINS DE RÉPARATION (CONSERVÉS) ---
-
+// --- PLUGIN 2 : Patch Build Gradle (Compatibilité) ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
@@ -267,6 +258,7 @@ function withKeyEventBuildGradleFix(config) {
         contents = contents.replace(/compileSdkVersion\s+.*$/gm, 'compileSdkVersion 34');
         contents = contents.replace(/buildToolsVersion\s+.*$/gm, 'buildToolsVersion "34.0.0"');
         contents = contents.replace(/targetSdkVersion\s+.*$/gm, 'targetSdkVersion 33');
+        contents = contents.replace(/minSdkVersion\s+.*$/gm, 'minSdkVersion 24');
         if (!contents.includes('compileOptions')) {
             contents = contents.replace(/android\s*{/, `android {
     compileOptions {
@@ -281,11 +273,14 @@ function withKeyEventBuildGradleFix(config) {
   ]);
 }
 
+// --- PLUGIN 3 : Injection KeyEvent (Fallback) ---
 function withKeyEventInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
-    // On garde l'injection "Standard" car elle sert de fallback si l'accessibilité n'est pas activée
-    if (src.includes('class MainActivity : ReactActivity') && !src.includes('fun dispatchKeyEvent')) {
+    const isKotlin = src.includes('class MainActivity : ReactActivity');
+
+    if (isKotlin) {
+      if (!src.includes('fun dispatchKeyEvent')) {
         const dispatchCode = `
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
     if (event.action == KeyEvent.ACTION_DOWN) {
@@ -296,14 +291,22 @@ function withKeyEventInjection(config) {
 `;
         const lastBraceIndex = src.lastIndexOf('}');
         src = src.substring(0, lastBraceIndex) + dispatchCode + src.substring(lastBraceIndex);
+        
+        // Ajout des imports manquants pour cette fonction si besoin
+        if (!src.includes('import android.view.KeyEvent')) {
+             src = src.replace('import android.os.Bundle', 'import android.os.Bundle\nimport android.view.KeyEvent');
+        }
+      }
     }
     return config;
   });
 }
 
+// --- PLUGIN 4 : MusicControl Fix ---
 function withMusicControlFix(config) {
   return withAndroidManifest(config, async (config) => {
-    const mainApplication = config.modResults.manifest.application[0];
+    const androidManifest = config.modResults;
+    const mainApplication = androidManifest.manifest.application[0];
     const serviceName = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotification';
     if (!mainApplication['service']?.some(s => s.$['android:name'] === serviceName)) {
       mainApplication['service'] = mainApplication['service'] || [];
