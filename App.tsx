@@ -69,6 +69,7 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  // RECONNEXION
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -87,6 +88,7 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
+  // AUDIO SYNC
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -94,6 +96,7 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
+  // Initializers...
   useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
   useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
   useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
@@ -273,32 +276,18 @@ const App: React.FC = () => {
     });
     
     conn.on('data', (data: any) => handleData(data, targetId));
-    conn.on('close', () => { if (view === 'ops' || view === 'map') handleHostDisconnect(); // Migration Host
-                                else showToast("Déconnecté", "error"); });
-    conn.on('error', () => handleHostDisconnect());
+    conn.on('close', () => { 
+        if (view === 'ops' || view === 'map') {
+            if (user.role === OperatorRole.HOST) return;
+            showToast("CONNEXION PERDUE", "error");
+            // Reconnexion simple
+            setTimeout(() => { connectToHost(targetId); }, 2000);
+        } else {
+            showToast("Déconnecté", "error"); 
+        }
+    });
+    conn.on('error', () => { showToast("Erreur connexion", "error"); });
   }, [user, handleData, showToast, hostId, view]);
-
-  const handleHostDisconnect = () => {
-      if (user.role === OperatorRole.HOST) return;
-      showToast("CONNEXION PERDUE - MIGRATION...", "error");
-      const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
-      candidates.push(user);
-      candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-      const newHost = candidates[0];
-      if (newHost && newHost.id === user.id) {
-          promoteToHost();
-      } else if (newHost) {
-          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
-      }
-  };
-
-  const promoteToHost = () => {
-      setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
-      setHostId(user.id);
-      audioService.updateNotification(user.id);
-      showToast("JE SUIS LE NOUVEL HÔTE", "info");
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
 
   const startServices = async () => {
     if (!hasConsent) return;
@@ -570,7 +559,7 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      {/* --- MODALE ACTION CORRIGÉE (Fuchsia) --- */}
+      {/* --- MODALE ACTION OPÉRATEUR CORRIGÉE --- */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
@@ -589,7 +578,7 @@ const App: React.FC = () => {
                
                <TouchableOpacity 
                    onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} 
-                   style={[styles.modalBtn, {backgroundColor: '#d946ef', marginBottom: 12, width: '100%'}]}
+                   style={[styles.modalBtn, {backgroundColor: '#c026d3', marginBottom: 12, width: '100%'}]}
                >
                    <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>APPEL PRIVÉ</Text>
                </TouchableOpacity>
