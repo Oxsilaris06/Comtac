@@ -1,24 +1,23 @@
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 
-// Définition des touches physiques
+// Liste des codes touches interceptés par notre Service Accessibilité
 const KEY_CODES = {
     VOLUME_UP: 24,
-    VOLUME_DOWN: 25,
+    // Note: Volume Down (25) est filtré directement en Java, on ne le recevra jamais ici
     HEADSET_HOOK: 79,     
     MEDIA_PLAY_PAUSE: 85,
     MEDIA_NEXT: 87,
     MEDIA_PREVIOUS: 88,
     MEDIA_PLAY: 126,
-    MEDIA_PAUSE: 127,
-    MEDIA_STOP: 86
+    MEDIA_PAUSE: 127
 };
 
 type CommandCallback = (source: string) => void;
 type ConnectionCallback = (isConnected: boolean, type: string) => void;
 
 class HeadsetService {
-    private lastVolumeUpTime: number = 0;
+    private lastActionTime: number = 0;
     private onCommand?: CommandCallback;
     private onConnectionChange?: ConnectionCallback;
     
@@ -57,39 +56,30 @@ class HeadsetService {
         });
     }
 
-    // --- 2. GESTION TOUCHES PHYSIQUES (KeyEvent) ---
+    // --- 2. GESTION DES COMMANDES (Reçoit les events du Service Accessibilité) ---
     private setupKeyEventListener() {
         KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
+            const now = Date.now();
             
-            // CAS 1 : VOLUME DOWN -> ON BLOQUE ABSOLUMENT
-            if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) {
-                return; // On ne fait RIEN.
-            }
+            // Si on reçoit Volume Down par miracle, on l'ignore
+            if (keyEvent.keyCode === 25) return;
 
-            // CAS 2 : VOLUME UP -> GESTION DOUBLE CLIC
-            if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
-                const now = Date.now();
-                // Si le délai entre deux appuis est < 500ms
-                if (now - this.lastVolumeUpTime < 500) {
-                    this.triggerCommand('DOUBLE_VOL_UP');
-                    this.lastVolumeUpTime = 0; // Reset pour éviter triple clic
-                } else {
-                    this.lastVolumeUpTime = now;
-                }
-                return; // On ne déclenche pas d'autre action
-            }
-
-            // CAS 3 : BOUTONS MEDIA / CASQUE -> DÉCLENCHEMENT DIRECT
+            // Filtre de touches valides
             const validKeys = Object.values(KEY_CODES);
             if (validKeys.includes(keyEvent.keyCode)) {
-                this.triggerCommand(`KEY_${keyEvent.keyCode}`);
+                
+                // Anti-rebond simple (400ms) pour éviter les doubles déclenchements
+                if (now - this.lastActionTime > 400) {
+                    this.triggerCommand(`KEY_${keyEvent.keyCode}`);
+                    this.lastActionTime = now;
+                }
             }
         });
     }
 
     private triggerCommand(source: string) {
         if (this.onCommand) {
-            console.log(`[HeadsetService] Commande reçue: ${source}`);
+            console.log(`[HeadsetService] Action: ${source}`);
             this.onCommand(source);
         }
     }
