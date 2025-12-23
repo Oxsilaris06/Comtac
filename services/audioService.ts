@@ -17,29 +17,31 @@ class AudioService {
   voxTimer: any = null;
 
   currentRoomId: string = 'Déconnecté';
-  lastToggleTime: number = 0;
   keepAliveTimer: any = null;
+  lastToggleTime: number = 0;
 
-  // Système d'abonnement pour l'UI
+  // Listeners pour l'UI
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
 
   async init(): Promise<boolean> {
     try {
+      // 1. Démarrage Micro (DÉSACTIVÉ PAR DÉFAUT)
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
-      this.setTx(false);
+      this.setTx(false); // <--- CRITIQUE : MICRO OFF
 
-      // Liaison avec HeadsetService
+      // 2. Liaison HeadsetService (Commandes Hardware)
       headsetService.setCommandCallback((source) => {
           this.safeToggle();
       });
       
       headsetService.setConnectionCallback((isConnected, type) => {
-          if(isConnected) this.updateNotification(this.currentRoomId, `Casque Connecté (${type})`);
+          if(isConnected) this.updateNotification(this.currentRoomId, `Audio: ${type}`);
       });
 
-      // Configuration Audio Boost
+      // 3. Configuration Audio (Boost & Priorité)
       try {
+          // On force 'audio' pour la compatibilité, mais avec Speakerphone
           InCallManager.start({ media: 'audio' }); 
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
@@ -47,7 +49,11 @@ class AudioService {
           await VolumeManager.setVolume(1.0); 
       } catch (e) { console.log("Audio Config Error:", e); }
 
+      // 4. Setup MusicControl (PRIORITÉ BLUETOOTH)
+      // Doit être fait APRES InCallManager
       this.setupMusicControl();
+
+      // 5. Vox & KeepAlive
       this.setupVox();
       this.startKeepAlive();
 
@@ -58,7 +64,7 @@ class AudioService {
     }
   }
 
-  // --- ABONNEMENT UI ---
+  // --- UI SUBSCRIPTION ---
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
       this.listeners.push(callback);
       return () => {
@@ -70,13 +76,14 @@ class AudioService {
       this.listeners.forEach(cb => cb(this.mode));
   }
 
-  // --- GESTION NOTIFICATION & ECRAN VERROUILLÉ ---
+  // --- GESTION MUSIQUE / BLUETOOTH ---
   private setupMusicControl() {
       try {
           if (Platform.OS === 'android') {
-             MusicControl.stopControl();
+             MusicControl.stopControl(); // Reset propre
              MusicControl.enableBackgroundMode(true);
              
+             // On active TOUT pour capter n'importe quelle télécommande
              const commands = [
                  'play', 'pause', 'stop', 'togglePlayPause', 
                  'nextTrack', 'previousTrack', 
@@ -88,6 +95,7 @@ class AudioService {
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
              MusicControl.handleAudioInterruptions(true);
 
+             // Mapping Universel
              commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => this.safeToggle()));
 
              this.updateNotification('Prêt');
@@ -97,7 +105,7 @@ class AudioService {
 
   private safeToggle() {
       const now = Date.now();
-      if (now - this.lastToggleTime > 500) { 
+      if (now - this.lastToggleTime > 400) { 
           this.toggleVox();
           this.lastToggleTime = now;
       }
@@ -130,7 +138,7 @@ class AudioService {
           album: subtitle, 
           duration: 0, 
           color: color,
-          isPlaying: true,
+          isPlaying: true, // TOUJOURS TRUE pour garder le focus AVRCP
           isSeekable: false,
           notificationIcon: 'icon' 
       });
@@ -154,13 +162,14 @@ class AudioService {
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
+    // WORKFLOW : Si PTT, on coupe tout de suite
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
 
     this.updateNotification();
-    this.notifyListeners(); // Notifie l'App instantanément
+    this.notifyListeners(); // Mise à jour UI instantanée
     return this.mode === 'vox';
   }
 
@@ -170,12 +179,6 @@ class AudioService {
     if (this.stream) {
       this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
-  }
-
-  muteIncoming(mute: boolean) {
-      this.remoteStreams.forEach(rs => {
-          rs.getAudioTracks().forEach(t => { t.enabled = !mute; });
-      });
   }
 
   playStream(remoteStream: MediaStream) { 
