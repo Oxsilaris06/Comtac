@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking } from 'react-native';
+import { Modal, View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking, Platform, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -35,14 +35,42 @@ export default function PrivacyConsentModal({ onConsentGiven }: PrivacyConsentMo
     try {
       await AsyncStorage.setItem(CONSENT_KEY, 'true');
       setModalVisible(false);
-      onConsentGiven();
+      
+      // --- SÉQUENCE D'ACTIVATION ACCESSIBILITÉ (Android Uniquement) ---
+      if (Platform.OS === 'android') {
+          Alert.alert(
+              "Configuration Tactique Requise",
+              "Pour que les boutons physiques (Volume, Casque) fonctionnent écran éteint, vous devez activer le service 'ComTac Hardware Control' dans les paramètres d'Accessibilité qui vont s'ouvrir.",
+              [
+                  {
+                      text: "PLUS TARD",
+                      style: "cancel",
+                      onPress: () => onConsentGiven()
+                  },
+                  { 
+                      text: "OUVRIR RÉGLAGES", 
+                      onPress: () => {
+                          // Ouvre directement le menu Accessibilité Android
+                          Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS');
+                          // On lance l'app
+                          onConsentGiven();
+                      }
+                  }
+              ],
+              { cancelable: false }
+          );
+      } else {
+          onConsentGiven();
+      }
+
     } catch (error) {
       console.error('Erreur sauvegarde consentement:', error);
+      onConsentGiven();
     }
   };
 
   const openPrivacyPolicy = () => {
-    // Lien vers le fichier hébergé sur GitHub (à adapter si besoin)
+    // Lien vers le fichier hébergé sur GitHub
     Linking.openURL('https://github.com/oxsilaris06/comtac/blob/main/PRIVACY.md');
   };
 
