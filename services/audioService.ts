@@ -34,30 +34,36 @@ class AudioService {
           InCallManager.setKeepScreenOn(true);
       } catch (e) { console.log("Audio Boost Error:", e); }
 
-      // --- SETUP NOTIFICATION & BLUETOOTH ---
+      // --- SETUP NOTIFICATION & BLUETOOTH (ROBUSTE) ---
       try {
           if (Platform.OS === 'android') {
              MusicControl.enableBackgroundMode(true);
              
-             // CONFIGURATION SPÉCIFIQUE DEMANDÉE :
-             // On désactive Play/Pause pour éviter la confusion
-             MusicControl.enableControl('play', false);
-             MusicControl.enableControl('pause', false);
-             MusicControl.enableControl('stop', false);
-             
-             // On active Suivant/Précédent pour le switch VOX
+             // GESTION ROBUSTE : On active une large gamme de contrôles pour capter tous les casques
+             // Même si on cible Next/Prev, certains casques envoient Play/Pause
+             MusicControl.enableControl('play', true);
+             MusicControl.enableControl('pause', true);
              MusicControl.enableControl('nextTrack', true);
              MusicControl.enableControl('previousTrack', true);
+             MusicControl.enableControl('togglePlayPause', true); // Bouton unique
+             
+             // Empêche le système de tuer le service
+             MusicControl.enableControl('stop', false);
+             MusicControl.enableControl('closeNotification', false, { when: 'never' });
 
-             // On initialise la notification
+             // Gestion du Focus Audio (Interruption par GPS/Appel)
+             MusicControl.handleAudioInterruptions(true);
+
              this.updateNotification('En attente...');
 
-             // Mapping des commandes Bluetooth/Notification
              const toggle = () => { this.toggleVox(); }; 
              
-             // Les écouteurs Bluetooth envoient ces commandes
+             // Mapping Multi-Boutons -> Même Action (Switch VOX/PTT)
              MusicControl.on(Command.nextTrack, toggle);
              MusicControl.on(Command.previousTrack, toggle);
+             MusicControl.on(Command.play, toggle);
+             MusicControl.on(Command.pause, toggle);
+             MusicControl.on(Command.togglePlayPause, toggle);
           }
       } catch (e) { }
 
@@ -105,18 +111,26 @@ class AudioService {
       if (roomId) this.currentRoomId = roomId;
       
       const voxStateText = this.mode === 'vox' ? 'VOX ACTIF' : 'PTT (Manuel)';
-      // Rouge (0xFFef4444) si VOX, Bleu (0xFF3b82f6) si PTT
       const color = this.mode === 'vox' ? 0xFFef4444 : 0xFF3b82f6;
 
+      // Configuration agressive pour le background
       MusicControl.setNowPlaying({
           title: `Salon #${this.currentRoomId}`,
           artist: `ComTac : ${voxStateText}`,
-          album: 'Switch via Suivant/Précédent', // Aide utilisateur
+          album: 'Utilisez Suivant/Précédent', 
           duration: 0, 
           color: color,
-          isPlaying: true, // Toujours actif pour garder le service vivant
+          // CRITIQUE : Toujours dire "Playing" au système pour garder le CPU/Events actifs
+          // même si on ne joue pas de son réel (le stream webrtc est géré à part)
+          isPlaying: true, 
           isSeekable: false,
           notificationIcon: 'icon' 
+      });
+      
+      // Force la mise à jour de l'état de lecture
+      MusicControl.updatePlayback({
+          state: MusicControl.STATE_PLAYING,
+          elapsedTime: 0
       });
   }
 
@@ -140,18 +154,15 @@ class AudioService {
   }
 
   toggleVox() {
-    // Bascule du mode
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // CRITIQUE : Si on passe en PTT, on COUPE le micro immédiatement
+    // Si on passe en PTT, on COUPE le micro immédiatement
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
 
-    // Mise à jour visuelle de la notif
     this.updateNotification();
-    
     return this.mode === 'vox';
   }
 
