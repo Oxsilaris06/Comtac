@@ -1,8 +1,8 @@
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 import { VolumeManager } from 'react-native-volume-manager';
-import MusicControl, { Command } from 'react-native-music-control';
 
+// Mapping des codes touches
 const KEY_CODES = {
     VOLUME_UP: 24,
     VOLUME_DOWN: 25,
@@ -20,7 +20,7 @@ type ConnectionCallback = (isConnected: boolean, type: string) => void;
 
 class HeadsetService {
     private lastVolumeUpTime: number = 0;
-    private lastCommandTime: number = 0; // Deduplication
+    private lastCommandTime: number = 0;
     private onCommand?: CommandCallback;
     private onConnectionChange?: ConnectionCallback;
     
@@ -43,32 +43,37 @@ class HeadsetService {
         this.onConnectionChange = callback;
     }
 
-    // --- 1. DÉTECTION CONNEXION CASQUE ---
+    // --- 1. DÉTECTION BRANCHEMENT CASQUE ---
     private setupConnectionListener() {
         const eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
         eventEmitter.addListener('onAudioDeviceChanged', (data) => {
             const current = data.selectedAudioDevice;
             const connected = current === 'Bluetooth' || current === 'WiredHeadset';
 
-            if (this.isHeadsetConnected !== connected) {
-                this.isHeadsetConnected = connected;
-                if (this.onConnectionChange) {
-                    this.onConnectionChange(connected, current);
-                }
+            // Mise à jour de l'état interne
+            this.isHeadsetConnected = connected;
+            
+            // Notification au service audio pour le routage
+            if (this.onConnectionChange) {
+                this.onConnectionChange(connected, current);
             }
+            console.log(`[Headset] Route Changed: ${current} (Connected: ${connected})`);
         });
     }
 
-    // --- 2. GESTION TOUCHES PHYSIQUES (KeyEvent) ---
+    // --- 2. INTERCEPTION TOUCHES PHYSIQUES (Via KeyEvent / Accessibility) ---
     private setupKeyEventListener() {
         KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
+            // Ignorer Volume Down (Réservé système)
             if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
 
+            // Gestion Spéciale Volume UP (Double Clic Tactique)
             if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
                 const now = Date.now();
                 if (now - this.lastVolumeUpTime < 500) {
                     this.triggerCommand('DOUBLE_VOL_UP');
                     this.lastVolumeUpTime = 0;
+                    // Reset volume visuel si besoin
                     setTimeout(() => VolumeManager.setVolume(1.0), 100);
                 } else {
                     this.lastVolumeUpTime = now;
@@ -76,6 +81,7 @@ class HeadsetService {
                 return;
             }
 
+            // Gestion Boutons Casque / Média (Déclenchement Direct)
             const validKeys = Object.values(KEY_CODES);
             if (validKeys.includes(keyEvent.keyCode)) {
                 this.triggerCommand(`KEY_${keyEvent.keyCode}`);
@@ -83,17 +89,16 @@ class HeadsetService {
         });
     }
 
-    // Appelé aussi depuis AudioService pour centraliser
+    // --- POINT D'ENTRÉE CENTRALISÉ (DEDUPLICATION) ---
     public triggerCommand(source: string) {
         const now = Date.now();
-        // DEDUPLICATION : On ignore les commandes trop rapprochées (400ms)
-        // Cela gère le cas où MusicControl et KeyEvent reçoivent la même commande en même temps
+        // Filtre Anti-Rebond (400ms) pour éviter les doublons si plusieurs services captent l'event
         if (now - this.lastCommandTime < 400) {
             return;
         }
 
         if (this.onCommand) {
-            console.log(`[Headset] Command Executed: ${source}`);
+            console.log(`[Headset] Command Validated: ${source}`);
             this.onCommand(source);
             this.lastCommandTime = now;
         }
