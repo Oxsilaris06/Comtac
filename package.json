@@ -35,6 +35,8 @@
     "react-native-volume-manager": "^1.10.0",
     "react-native-incall-manager": "^4.1.0",
     "react-native-keyevent": "^0.2.0",
+    "react-native-callkeep": "^4.3.14",
+    "react-native-uuid": "^2.0.1",
     "@config-plugins/react-native-webrtc": "^9.0.0",
     "@expo/vector-icons": "^14.0.0"
   },
