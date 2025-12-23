@@ -17,77 +17,89 @@ class AudioService {
 
   currentRoomId: string = 'Déconnecté';
   
-  // Variables pour la logique de contrôle (Anti-rebond & Double Clic)
+  // Variables Logiques
   lastVolume: number = 0;
   lastVolumeUpTime: number = 0;
-  lastToggleTime: number = 0; // Sécurité anti-spam commandes BT
+  lastToggleTime: number = 0;
+  
+  // Timer pour maintenir le focus Media actif
+  keepAliveTimer: any = null;
 
   async init(): Promise<boolean> {
     try {
+      // ÉTAPE 1 : Démarrer le moteur WebRTC (Micro)
+      // C'est lui qui risque de basculer en mode "Appel". On le fait en premier.
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
       this.setTx(false);
 
-      // --- CONFIGURATION AUDIO (BOOST) ---
+      // ÉTAPE 2 : Forcer la configuration Audio "Media/Haut-Parleur"
       try {
+          // On utilise 'video' qui favorise le haut-parleur et le volume média
           InCallManager.start({ media: 'video' }); 
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
+          InCallManager.setKeepScreenOn(true); // Garde le CPU éveillé
+          
+          // Boost Volume Système
           await VolumeManager.setVolume(1.0); 
-          InCallManager.setKeepScreenOn(true);
-      } catch (e) { console.log("Audio Boost Error:", e); }
+      } catch (e) { console.log("Audio Config Error:", e); }
 
-      // --- SETUP COMMANDES UNIVERSELLES (BLUETOOTH & NOTIF) ---
+      // ÉTAPE 3 : Prendre le Focus "Musique/AVRCP" (CRITIQUE : EN DERNIER)
+      // En déclarant le service musical maintenant, on "écrase" la priorité d'appel de WebRTC
+      // pour la gestion des boutons bluetooth.
+      this.setupMusicControl();
+
+      // ÉTAPE 4 : Setup des Triggers annexes (VOX & Volume Physique)
+      this.setupVox();
+      this.setupVolumeTrigger();
+
+      // ÉTAPE 5 : Lancer le Heartbeat pour maintenir le focus Media
+      this.startKeepAlive();
+
+      return true;
+    } catch (err) {
+      console.error("[Audio] Init Error:", err);
+      return false;
+    }
+  }
+
+  private setupMusicControl() {
       try {
           if (Platform.OS === 'android') {
              MusicControl.enableBackgroundMode(true);
              
-             // 1. ACTIVATION DE TOUTES LES COMMANDES POSSIBLES (AVRCP Catch-All)
-             // Cela garantit que peu importe le bouton appuyé, l'événement est capté
-             MusicControl.enableControl('play', true);
-             MusicControl.enableControl('pause', true);
-             MusicControl.enableControl('stop', true);
-             MusicControl.enableControl('nextTrack', true);
-             MusicControl.enableControl('previousTrack', true);
-             MusicControl.enableControl('seekForward', true); // Certains casques utilisent ceci
-             MusicControl.enableControl('seekBackward', true);
-             MusicControl.enableControl('skipForward', true);
-             MusicControl.enableControl('skipBackward', true);
-             MusicControl.enableControl('togglePlayPause', true);
+             // Activation massive de toutes les commandes pour capter tous les casques
+             const commands = ['play', 'pause', 'stop', 'nextTrack', 'previousTrack', 'togglePlayPause', 'seekForward', 'seekBackward'];
+             commands.forEach(cmd => MusicControl.enableControl(cmd as any, true));
              
-             // Empêche le système de tuer le service
+             // Verrouillage du service
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
-
-             // Gestion du Focus Audio
+             
+             // Gestion agressive du Focus Audio : 
+             // Si une autre app nous coupe, on reprend la main dès que possible (true)
              MusicControl.handleAudioInterruptions(true);
 
-             this.updateNotification('En attente...');
-
-             // 2. FONCTION DE BASCULE SÉCURISÉE (DEBOUNCE)
-             // Empêche le double déclenchement si le casque envoie "Pause" puis "Play"
+             // Fonction de bascule unique (Toggle)
              const safeToggle = () => { 
                  const now = Date.now();
-                 if (now - this.lastToggleTime > 500) { // 500ms de délai minimum
-                     this.toggleVox(); 
+                 // Anti-rebond 500ms
+                 if (now - this.lastToggleTime > 500) { 
+                     this.toggleVox();
                      this.lastToggleTime = now;
                  }
              }; 
              
-             // 3. MAPPING ABSOLU DE TOUS LES ÉVÉNEMENTS
-             MusicControl.on(Command.play, safeToggle);
-             MusicControl.on(Command.pause, safeToggle);
-             MusicControl.on(Command.stop, safeToggle);
-             MusicControl.on(Command.nextTrack, safeToggle);
-             MusicControl.on(Command.previousTrack, safeToggle);
-             MusicControl.on(Command.seekForward, safeToggle);
-             MusicControl.on(Command.seekBackward, safeToggle);
-             MusicControl.on(Command.skipForward, safeToggle);
-             MusicControl.on(Command.skipBackward, safeToggle);
-             MusicControl.on(Command.togglePlayPause, safeToggle);
-          }
-      } catch (e) { }
+             // Mapping
+             commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], safeToggle));
 
-      // --- SETUP VOX (VAD) ---
+             // Initialisation visuelle
+             this.updateNotification('En attente...');
+          }
+      } catch (e) { console.log("MusicControl Error", e); }
+  }
+
+  private setupVox() {
       try {
           RNSoundLevel.start();
           RNSoundLevel.onNewFrame = (data: any) => {
@@ -98,28 +110,27 @@ class AudioService {
               }
           };
       } catch (e) { }
+  }
 
-      // --- SETUP VOLUME TRIGGER (DOUBLE CLIC) ---
+  private setupVolumeTrigger() {
       try {
-          const vol = await VolumeManager.getVolume();
-          this.lastVolume = typeof vol === 'number' ? vol : 0.5;
+          VolumeManager.getVolume().then(v => { this.lastVolume = typeof v === 'number' ? v : 0.5; });
 
           VolumeManager.addVolumeListener((result) => {
               const currentVol = result.volume;
               const now = Date.now();
 
-              // Détection Hausse Volume (y compris si déjà au max)
-              if (currentVol > this.lastVolume || (currentVol === 1 && this.lastVolume === 1)) {
-                  // Si clic rapide (<600ms) = DOUBLE CLIC
+              // Si changement de volume détecté (indique une interaction physique)
+              if (currentVol !== this.lastVolume) {
+                  // Détection Double Clic (<600ms)
                   if (now - this.lastVolumeUpTime < 600) {
-                      // On utilise aussi le safeToggle logic ici manuellement
-                      if (now - this.lastToggleTime > 500) {
+                      const safeNow = Date.now();
+                      if (safeNow - this.lastToggleTime > 500) {
                           this.toggleVox(); 
-                          this.lastToggleTime = now;
+                          this.lastToggleTime = safeNow;
                       }
-                      this.lastVolumeUpTime = 0; // Reset pour éviter triple clic
-                      
-                      // Remise à niveau du volume (Feedback tactile : le volume reste à fond)
+                      this.lastVolumeUpTime = 0; 
+                      // Force le volume au max (Feedback tactique)
                       setTimeout(() => VolumeManager.setVolume(1.0), 100);
                   } else {
                       this.lastVolumeUpTime = now;
@@ -128,36 +139,62 @@ class AudioService {
               this.lastVolume = currentVol;
           });
       } catch (e) { }
-
-      return true;
-    } catch (err) {
-      console.error("[Audio] Init Error:", err);
-      return false;
-    }
   }
 
+  // --- COEUR DU SYSTÈME : NOTIFICATION & STATE ---
+  
   updateNotification(roomId?: string) {
       if (roomId) this.currentRoomId = roomId;
       
-      const voxStateText = this.mode === 'vox' ? 'VOX ACTIF' : 'PTT (Manuel)';
-      const color = this.mode === 'vox' ? 0xFFef4444 : 0xFF3b82f6;
+      const isVox = this.mode === 'vox';
+      const text = isVox ? 'VOX ACTIF' : 'PTT (Manuel)';
+      const color = isVox ? 0xFFef4444 : 0xFF3b82f6;
 
+      // On force la mise à jour des métadonnées
       MusicControl.setNowPlaying({
           title: `Salon #${this.currentRoomId}`,
-          artist: `ComTac : ${voxStateText}`,
-          album: 'Appuyez sur un bouton pour changer', 
+          artist: `ComTac : ${text}`,
+          album: 'Mode Tactique', 
           duration: 0, 
           color: color,
-          // CRITIQUE : Toujours "Playing" pour capturer les événements Bluetooth
-          isPlaying: true, 
+          isPlaying: true, // TOUJOURS TRUE pour AVRCP
           isSeekable: false,
           notificationIcon: 'icon' 
       });
       
+      // On réaffirme l'état "Playing" au système Android
       MusicControl.updatePlayback({
           state: MusicControl.STATE_PLAYING,
-          elapsedTime: 0
+          elapsedTime: 0 // Reset timer pour montrer de l'activité
       });
+  }
+
+  // Heartbeat : Rappelle toutes les 5s à Android qu'on est une app de musique
+  // Cela évite que le profil HFP (Appel) ne reprenne le dessus sur le profil AVRCP (Média)
+  private startKeepAlive() {
+      if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = setInterval(() => {
+          // On ne change pas le texte, on rafraîchit juste l'état interne
+          MusicControl.updatePlayback({
+              state: MusicControl.STATE_PLAYING,
+              elapsedTime: Date.now() // Fake progress
+          });
+      }, 5000);
+  }
+
+  // --- LOGIQUE METIER ---
+
+  toggleVox() {
+    this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
+    
+    // Sécurité PTT : Coupure immédiate
+    if (this.mode === 'ptt') {
+        this.setTx(false);
+        if (this.voxTimer) clearTimeout(this.voxTimer);
+    }
+
+    this.updateNotification(); // Met à jour l'UI système
+    return this.mode === 'vox';
   }
 
   setTx(state: boolean) {
@@ -177,21 +214,6 @@ class AudioService {
   playStream(remoteStream: MediaStream) { 
       if (remoteStream.id === this.stream?.id) return;
       this.remoteStreams.push(remoteStream);
-  }
-
-  toggleVox() {
-    // 1. Bascule du mode
-    this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
-    
-    // 2. Si on repasse en PTT, sécurité absolue : on coupe le micro
-    if (this.mode === 'ptt') {
-        this.setTx(false);
-        if (this.voxTimer) clearTimeout(this.voxTimer);
-    }
-
-    // 3. Mise à jour Notification et UI
-    this.updateNotification();
-    return this.mode === 'vox';
   }
 
   startMetering(callback: (level: number) => void) {
