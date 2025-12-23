@@ -111,24 +111,54 @@ function withKeyEventBuildGradleFix(config) {
   ]);
 }
 
-// --- PLUGIN 2 : Injection du code natif pour écouter les boutons (CRITIQUE) ---
+// --- PLUGIN 2 : Injection du code natif pour écouter les boutons (KOTLIN SUPPORT) ---
 function withKeyEventInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
+    // Détection du langage (Kotlin ou Java)
+    const isKotlin = config.modResults.language === 'kotlin' || src.includes('class MainActivity : ReactActivity');
 
-    // 1. Ajouter les imports Java
-    if (!src.includes('com.github.kevinejohn.keyevent.KeyEventModule')) {
-      src = src.replace(
-        'package com.tactical.comtac;',
-        `package com.tactical.comtac;
+    if (isKotlin) {
+      // --- SYNTAXE KOTLIN ---
+      if (!src.includes('KeyEventModule')) {
+        const packageMatch = src.match(/package\s+[\w\.]+;?/);
+        if (packageMatch) {
+          src = src.replace(
+            packageMatch[0],
+            `${packageMatch[0]}\nimport com.github.kevinejohn.keyevent.KeyEventModule\nimport android.view.KeyEvent`
+          );
+        }
+      }
+
+      if (!src.includes('fun dispatchKeyEvent')) {
+        const dispatchCode = `
+  override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    if (event.action == KeyEvent.ACTION_DOWN) {
+       KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
+    }
+    if (event.action == KeyEvent.ACTION_UP) {
+       KeyEventModule.getInstance().onKeyUpEvent(event.keyCode, event)
+    }
+    return super.dispatchKeyEvent(event)
+  }
+`;
+        const lastBraceIndex = src.lastIndexOf('}');
+        src = src.substring(0, lastBraceIndex) + dispatchCode + src.substring(lastBraceIndex);
+      }
+
+    } else {
+      // --- SYNTAXE JAVA (Legacy) ---
+      if (!src.includes('com.github.kevinejohn.keyevent.KeyEventModule')) {
+        src = src.replace(
+          'package com.tactical.comtac;',
+          `package com.tactical.comtac;
 import com.github.kevinejohn.keyevent.KeyEventModule;
 import android.view.KeyEvent;`
-      );
-    }
+        );
+      }
 
-    // 2. Injecter la méthode dispatchKeyEvent
-    if (!src.includes('public boolean dispatchKeyEvent')) {
-        const dispatchCode = `
+      if (!src.includes('public boolean dispatchKeyEvent')) {
+          const dispatchCode = `
   @Override
   public boolean dispatchKeyEvent(KeyEvent event) {
     if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -140,8 +170,9 @@ import android.view.KeyEvent;`
     return super.dispatchKeyEvent(event);
   }
 `;
-        const lastBraceIndex = src.lastIndexOf('}');
-        src = src.substring(0, lastBraceIndex) + dispatchCode + src.substring(lastBraceIndex);
+          const lastBraceIndex = src.lastIndexOf('}');
+          src = src.substring(0, lastBraceIndex) + dispatchCode + src.substring(lastBraceIndex);
+      }
     }
 
     config.modResults.contents = src;
