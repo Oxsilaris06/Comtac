@@ -23,6 +23,7 @@
     "expo-av": "~14.0.5",
     "expo-build-properties": "~0.12.1",
     "@react-native-async-storage/async-storage": "~1.23.1",
+    "@react-native-community/netinfo": "11.3.1",
     "react-native-webview": "13.8.6",
     "react-native-webrtc": "124.0.4",
     "peerjs": "^1.5.2",
@@ -33,7 +34,7 @@
     "react-native-music-control": "^1.4.1",
     "react-native-volume-manager": "^1.10.0",
     "react-native-incall-manager": "^4.1.0",
-    "react-native-keyevent": "^0.2.0", 
+    "react-native-keyevent": "^0.2.0",
     "@config-plugins/react-native-webrtc": "^9.0.0",
     "@expo/vector-icons": "^14.0.0"
   },
