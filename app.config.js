@@ -3,112 +3,83 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
-  // On chaîne les plugins : CallKeep (Nouveau) -> Accessibilité -> Patch Gradle -> Injection Kotlin -> Music Control
-  return withCallKeepManifest(
-    withAccessibilityService(
-      withKeyEventBuildGradleFix(
-        withMainActivityInjection(
-          withMusicControlFix({
-            name: "COM TAC v14",
-            slug: "comtac-v14",
-            version: "1.0.0",
-            orientation: "portrait",
-            icon: "./assets/icon.png",
-            userInterfaceStyle: "light",
-            splash: {
-              image: "./assets/splash.png",
-              resizeMode: "contain",
+  return withAccessibilityService(
+    withKeyEventBuildGradleFix(
+      withMainActivityInjection(
+        withMusicControlFix({
+          name: "COM TAC v14",
+          slug: "comtac-v14",
+          version: "1.0.0",
+          orientation: "portrait",
+          icon: "./assets/icon.png",
+          userInterfaceStyle: "light",
+          splash: {
+            image: "./assets/splash.png",
+            resizeMode: "contain",
+            backgroundColor: "#000000"
+          },
+          assetBundlePatterns: ["**/*"],
+          ios: {
+            supportsTablet: true,
+            infoPlist: {
+              UIBackgroundModes: ["audio", "voip", "fetch"]
+            }
+          },
+          android: {
+            adaptiveIcon: {
+              foregroundImage: "./assets/adaptive-icon.png",
               backgroundColor: "#000000"
             },
-            assetBundlePatterns: ["**/*"],
-            ios: {
-              supportsTablet: true,
-              infoPlist: {
-                UIBackgroundModes: ["audio", "voip", "fetch"]
-              }
-            },
-            android: {
-              adaptiveIcon: {
-                foregroundImage: "./assets/adaptive-icon.png",
-                backgroundColor: "#000000"
-              },
-              package: "com.tactical.comtac",
-              permissions: [
-                "android.permission.INTERNET",
-                "android.permission.ACCESS_NETWORK_STATE",
-                "android.permission.CAMERA",
-                "android.permission.RECORD_AUDIO",
-                "android.permission.ACCESS_FINE_LOCATION",
-                "android.permission.ACCESS_COARSE_LOCATION",
-                "android.permission.FOREGROUND_SERVICE",
-                "android.permission.WAKE_LOCK",
-                "android.permission.BATTERY_STATS",
-                "android.permission.BLUETOOTH",
-                "android.permission.BLUETOOTH_CONNECT",
-                "android.permission.MODIFY_AUDIO_SETTINGS",
-                "android.permission.BIND_ACCESSIBILITY_SERVICE",
-                "android.permission.SYSTEM_ALERT_WINDOW",
-                "android.permission.REORDER_TASKS",
-                // NOUVELLE PERMISSION CRITIQUE CALLKEEP
-                "android.permission.MANAGE_OWN_CALLS",
-                "android.permission.READ_PHONE_STATE",
-                "android.permission.READ_PHONE_NUMBERS"
-              ]
-            },
-            plugins: [
-              ["expo-camera", { cameraPermission: "Allow camera", microphonePermission: "Allow mic" }],
-              ["expo-location", { locationAlwaysAndWhenInUsePermission: "Allow location" }],
-              [
-                "expo-build-properties", 
-                { 
-                  android: { 
-                    minSdkVersion: 24, 
-                    compileSdkVersion: 34, 
-                    buildToolsVersion: "34.0.0",
-                    targetSdkVersion: 33 
-                  },
-                  ios: {
-                    deploymentTarget: "13.4"
-                  }
-                }
-              ],
-              "@config-plugins/react-native-webrtc"
+            package: "com.tactical.comtac",
+            permissions: [
+              "android.permission.INTERNET",
+              "android.permission.ACCESS_NETWORK_STATE",
+              "android.permission.CAMERA",
+              "android.permission.RECORD_AUDIO",
+              "android.permission.ACCESS_FINE_LOCATION",
+              "android.permission.ACCESS_COARSE_LOCATION",
+              "android.permission.FOREGROUND_SERVICE",
+              // AJOUTS CRITIQUES POUR ANDROID 14
+              "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+              "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+              "android.permission.WAKE_LOCK",
+              "android.permission.BATTERY_STATS",
+              "android.permission.BLUETOOTH",
+              "android.permission.BLUETOOTH_CONNECT",
+              "android.permission.MODIFY_AUDIO_SETTINGS",
+              "android.permission.BIND_ACCESSIBILITY_SERVICE",
+              "android.permission.SYSTEM_ALERT_WINDOW",
+              "android.permission.REORDER_TASKS",
+              "android.permission.MANAGE_OWN_CALLS",
+              "android.permission.READ_PHONE_STATE"
             ]
-          })
-        )
+          },
+          plugins: [
+            ["expo-camera", { cameraPermission: "Allow camera", microphonePermission: "Allow mic" }],
+            ["expo-location", { locationAlwaysAndWhenInUsePermission: "Allow location" }],
+            [
+              "expo-build-properties", 
+              { 
+                android: { 
+                  minSdkVersion: 24, 
+                  compileSdkVersion: 34, 
+                  buildToolsVersion: "34.0.0",
+                  targetSdkVersion: 33 
+                },
+                ios: {
+                  deploymentTarget: "13.4"
+                }
+              }
+            ],
+            "@config-plugins/react-native-webrtc"
+          ]
+        })
       )
     )
   );
 };
 
-// --- NOUVEAU PLUGIN : CALLKEEP MANIFEST ---
-function withCallKeepManifest(config) {
-  return withAndroidManifest(config, async (config) => {
-    const manifest = config.modResults;
-    const app = manifest.manifest.application[0];
-    const serviceName = 'io.wazo.callkeep.VoiceConnectionService';
-
-    if (!app.service?.some(s => s.$['android:name'] === serviceName)) {
-      app.service = app.service || [];
-      app.service.push({
-        $: {
-          'android:name': serviceName,
-          'android:label': 'Wazo',
-          'android:permission': 'android.permission.BIND_TELECOM_CONNECTION_SERVICE',
-          // Important pour Android 14+
-          'android:foregroundServiceType': 'camera|microphone',
-          'android:exported': 'true'
-        },
-        'intent-filter': [{
-          'action': [{ $: { 'android:name': 'android.telecom.ConnectionService' } }]
-        }]
-      });
-    }
-    return config;
-  });
-}
-
-// --- PLUGIN 1 : INJECTION KOTLIN (MainActivity) ---
+// --- PLUGIN 1 : INJECTION KOTLIN SÉCURISÉE ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -135,6 +106,7 @@ function withMainActivityInjection(config) {
          }
       }
 
+      // AJOUT : Sécurité "getInstance() != null" pour éviter le crash au démarrage
       if (!src.includes('private val comTacReceiver')) {
         const lastBrace = src.lastIndexOf('}');
         const codeToInject = `
@@ -143,14 +115,20 @@ function withMainActivityInjection(config) {
     override fun onReceive(context: Context, intent: Intent) {
       if ("COMTAC_HARDWARE_EVENT" == intent.action) {
         val keyCode = intent.getIntExtra("keyCode", 0)
-        KeyEventModule.getInstance().onKeyDownEvent(keyCode, null)
+        // Null Check pour éviter le crash au boot
+        if (KeyEventModule.getInstance() != null) {
+            KeyEventModule.getInstance().onKeyDownEvent(keyCode, null)
+        }
       }
     }
   }
 
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
     if (event.action == KeyEvent.ACTION_DOWN) {
-       KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
+       // Null Check critique
+       if (KeyEventModule.getInstance() != null) {
+           KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
+       }
     }
     return super.dispatchKeyEvent(event)
   }
@@ -167,7 +145,6 @@ function withMainActivityInjection(config) {
         registerReceiver(comTacReceiver, filter)
     }
 `;
-      
       if (src.includes('super.onCreate(null)')) {
            if (!src.includes('registerReceiver(comTacReceiver')) {
                src = src.replace('super.onCreate(null)', `super.onCreate(null)\n${registerCode}`);
@@ -179,14 +156,13 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- PLUGIN 2 : SERVICE D'ACCESSIBILITÉ ---
+// ... (Le reste des plugins withAccessibilityService, withKeyEventBuildGradleFix, withMusicControlFix reste identique) ...
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
     async (config) => {
         const resXmlPath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/res/xml');
         if (!fs.existsSync(resXmlPath)) fs.mkdirSync(resXmlPath, { recursive: true });
-        
         const xmlContent = `<?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeAllMask"
@@ -195,12 +171,10 @@ function withAccessibilityService(config) {
     android:canRetrieveWindowContent="false"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="100" />`;
-        
         fs.writeFileSync(path.join(resXmlPath, 'accessibility_service_config.xml'), xmlContent);
         return config;
     }
   ]);
-
   config = withStringsXml(config, config => {
       if(!config.modResults.resources.string) config.modResults.resources.string = [];
       if (!config.modResults.resources.string.find(s => s.$.name === "accessibility_service_description")) {
@@ -208,32 +182,25 @@ function withAccessibilityService(config) {
       }
       return config;
   });
-
   config = withDangerousMod(config, [
     'android',
     async (config) => {
         const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
         if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
-
         const javaContent = `package com.tactical.comtac;
-
 import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.KeyEvent;
 import android.content.Intent;
-
 public class ComTacAccessibilityService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {}
-
     @Override
     public void onInterrupt() {}
-
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
         int action = event.getAction();
         int keyCode = event.getKeyCode();
-
         if (action == KeyEvent.ACTION_DOWN) {
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
                 keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
@@ -242,14 +209,10 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || 
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
-                
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
-                
-                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-                    return true; 
-                }
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) { return true; }
             }
         }
         return super.onKeyEvent(event);
@@ -259,13 +222,11 @@ public class ComTacAccessibilityService extends AccessibilityService {
         return config;
     }
   ]);
-
   config = withAndroidManifest(config, async (config) => {
       const manifest = config.modResults;
       const app = manifest.manifest.application[0];
       if (app.service) app.service = app.service.filter(s => s.$['android:name'] !== '.ComTacAccessibilityService');
       else app.service = [];
-
       app.service.push({
           $: {
               'android:name': '.ComTacAccessibilityService',
@@ -284,11 +245,8 @@ public class ComTacAccessibilityService extends AccessibilityService {
       });
       return config;
   });
-
   return config;
 }
-
-// --- PLUGIN 3 : PATCH BUILD GRADLE ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
@@ -313,12 +271,9 @@ function withKeyEventBuildGradleFix(config) {
     },
   ]);
 }
-
-// --- PLUGIN 4 : MUSIC CONTROL FIX ---
 function withMusicControlFix(config) {
   return withAndroidManifest(config, async (config) => {
-    const androidManifest = config.modResults;
-    const mainApplication = androidManifest.manifest.application[0];
+    const mainApplication = config.modResults.manifest.application[0];
     const serviceName = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotification';
     if (!mainApplication['service']?.some(s => s.$['android:name'] === serviceName)) {
       mainApplication['service'] = mainApplication['service'] || [];
