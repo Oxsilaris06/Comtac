@@ -10,7 +10,7 @@ class AudioService {
   stream: MediaStream | null = null;
   remoteStreams: MediaStream[] = []; 
   isTx: boolean = false;
-  mode: 'ptt' | 'vox' = 'ptt'; // INITIALISATION STRICTE PTT
+  mode: 'ptt' | 'vox' = 'ptt';
   
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
@@ -18,48 +18,48 @@ class AudioService {
 
   currentRoomId: string = 'Déconnecté';
   keepAliveTimer: any = null;
-  reclaimFocusTimer: any = null;
 
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
 
   async init(): Promise<boolean> {
     try {
-      // 1. Audio / Micro (STRICTEMENT OFF AU DÉPART)
+      // 1. Démarrage Micro (STRICTEMENT OFF AU DÉPART)
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
       this.setTx(false);
-      this.mode = 'ptt'; // Force PTT au démarrage
 
-      // 2. Liaison HeadsetService
+      // 2. Liaison HeadsetService (Commandes & Routage)
       headsetService.setCommandCallback((source) => {
-          console.log('[AudioService] Toggle triggered by:', source);
           this.toggleVox(); 
       });
       
       headsetService.setConnectionCallback((isConnected, type) => {
           console.log(`[Audio] Routing Update: ${type}`);
           if(isConnected) {
+              // Casque connecté : On désactive le haut-parleur forcé
               InCallManager.setForceSpeakerphoneOn(false);
               this.updateNotification(this.currentRoomId, `Casque Actif (${type})`);
           } else {
+              // Pas de casque : On force le haut-parleur (Talkie)
               InCallManager.setForceSpeakerphoneOn(true);
               this.updateNotification(this.currentRoomId, `Haut-Parleur Actif`);
           }
-          // CRITIQUE : Après un changement de route, on reprend le focus média
-          this.forceBluetoothPriority();
+          // On s'assure que le focus média est conservé après un changement de route
+          this.refreshMediaFocus();
       });
 
       // 3. Configuration Audio Initiale
       try {
-          // Mode 'audio' standard mais avec focus agressif
+          // Mode 'audio' standard (meilleure compatibilité Bluetooth)
           InCallManager.start({ media: 'audio' });
+          // Par défaut on suppose pas de casque -> Speaker
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setKeepScreenOn(true); 
           await VolumeManager.setVolume(1.0); 
       } catch (e) { console.log("Audio Config Error:", e); }
 
-      // 4. Setup MusicControl
-      this.forceBluetoothPriority();
+      // 4. Setup MusicControl (PRIORITÉ BLUETOOTH)
+      this.setupMusicControl();
 
       // 5. Vox & KeepAlive
       this.setupVox();
@@ -75,8 +75,6 @@ class AudioService {
   // --- UI SUBSCRIPTION ---
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
       this.listeners.push(callback);
-      // Notifier l'état actuel dès l'abonnement
-      callback(this.mode); 
       return () => { this.listeners = this.listeners.filter(l => l !== callback); };
   }
 
@@ -84,30 +82,11 @@ class AudioService {
       this.listeners.forEach(cb => cb(this.mode));
   }
 
-  // --- METHODE PUBLIQUE DE FORÇAGE ---
-  // À appeler chaque fois que l'environnement change (nouvelle connexion, scan QR...)
-  public forceBluetoothPriority() {
-      console.log('[AudioService] Forcing Bluetooth Priority...');
-      this.setupMusicControl();
-      
-      // On lance une boucle agressive de reprise de focus pendant 10 secondes
-      // Utile lors de l'établissement d'appel WebRTC qui tente de voler le focus plusieurs fois
-      if (this.reclaimFocusTimer) clearInterval(this.reclaimFocusTimer);
-      let attempts = 0;
-      this.reclaimFocusTimer = setInterval(() => {
-          this.refreshMediaFocus();
-          attempts++;
-          if (attempts > 5) clearInterval(this.reclaimFocusTimer);
-      }, 2000);
-  }
-
   // --- GESTION MUSIQUE / BLUETOOTH ---
   private setupMusicControl() {
       try {
           if (Platform.OS === 'android') {
-             // On réinitialise complètement pour être sûr
-             MusicControl.stopControl(); 
-             
+             MusicControl.stopControl();
              MusicControl.enableBackgroundMode(true);
              
              const commands = [
@@ -119,26 +98,21 @@ class AudioService {
              commands.forEach(cmd => MusicControl.enableControl(cmd as any, true));
              
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
-             
-             // Important : On demande à Android de nous redonner la main si on est interrompu
              MusicControl.handleAudioInterruptions(true);
 
+             // Redirection vers HeadsetService pour déduplication
              commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => {
                  headsetService.triggerCommand('BLUETOOTH_' + cmd);
              }));
 
-             this.updateNotification(this.currentRoomId !== 'Déconnecté' ? this.currentRoomId : 'Prêt');
+             this.updateNotification('Prêt');
           }
       } catch (e) { }
   }
 
   private refreshMediaFocus() {
       if (Platform.OS === 'android') {
-          // Cette commande "fake" rappelle au système que nous sommes actifs
-          MusicControl.updatePlayback({ 
-              state: MusicControl.STATE_PLAYING, 
-              elapsedTime: Date.now() 
-          });
+          MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING, elapsedTime: 0 });
       }
   }
 
@@ -146,15 +120,12 @@ class AudioService {
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
+    // Si passage en PTT, coupure immédiate
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
-    } else {
-        // Feedback Tactile/Sonore (Optionnel mais recommandé pour confirmer l'activation BT)
-        // Vibration courte
     }
 
-    console.log(`[AudioService] Mode switched to: ${this.mode}`);
     this.updateNotification();
     this.notifyListeners();
     return this.mode === 'vox';
@@ -174,7 +145,7 @@ class AudioService {
           album: subtitle, 
           duration: 0, 
           color: color,
-          isPlaying: true, // TOUJOURS TRUE
+          isPlaying: true, 
           isSeekable: false,
           notificationIcon: 'icon' 
       });
@@ -196,8 +167,7 @@ class AudioService {
 
   private startKeepAlive() {
       if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
-      // On rafraîchit le statut "Playing" toutes les 3s pour contrer le mode Appel de WebRTC
-      this.keepAliveTimer = setInterval(() => { this.refreshMediaFocus(); }, 3000);
+      this.keepAliveTimer = setInterval(() => { this.refreshMediaFocus(); }, 5000);
   }
 
   setTx(state: boolean) {
@@ -217,10 +187,6 @@ class AudioService {
   playStream(remoteStream: MediaStream) { 
       if (remoteStream.id === this.stream?.id) return;
       this.remoteStreams.push(remoteStream);
-      
-      // FIX : Quand un nouveau flux arrive (nouvel utilisateur), WebRTC peut revoler le focus.
-      // On force la reprise de la priorité Bluetooth.
-      this.forceBluetoothPriority();
   }
 
   startMetering(callback: (level: number) => void) {
