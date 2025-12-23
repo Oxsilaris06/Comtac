@@ -21,7 +21,7 @@ import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
-// IMPORT MODALE
+// IMPORT MODALE DE CONSENTEMENT
 import PrivacyConsentModal from './components/PrivacyConsentModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -38,6 +38,7 @@ const App: React.FC = () => {
   });
 
   const [view, setView] = useState<ViewType>('login');
+  // Peers stocke tous les connectés. La clé est l'ID PeerJS.
   const [peers, setPeers] = useState<Record<string, UserData>>({});
   const [pings, setPings] = useState<PingData[]>([]);
   const [bannedPeers, setBannedPeers] = useState<string[]>([]);
@@ -57,11 +58,14 @@ const App: React.FC = () => {
   const [showQRModal, setShowQRModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPingModal, setShowPingModal] = useState(false);
+  
+  // Selection pour Modale Action
   const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(null);
+  
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
   const [privatePeerId, setPrivatePeerId] = useState<string | null>(null);
 
-  // ETAT CONSENTEMENT
+  // ETAT CONSENTEMENT (Bloque les services tant que false)
   const [hasConsent, setHasConsent] = useState(false);
 
   const peerRef = useRef<Peer | null>(null);
@@ -69,7 +73,7 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // ABONNEMENT AUDIO
+  // ABONNEMENT AUDIO TEMPS RÉEL (Remplace le polling)
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -77,7 +81,7 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
-  // CHARGEMENT TRIGRAMME
+  // CHARGEMENT MEMOIRE TRIGRAMME
   useEffect(() => {
     AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
       if (saved) setLoginInput(saved);
@@ -91,7 +95,7 @@ const App: React.FC = () => {
     return () => sub && sub.remove();
   }, []);
 
-  // BOUSSOLE
+  // BOUSSOLE / MAGNETOMETRE
   useEffect(() => {
     Magnetometer.setUpdateInterval(100);
     const subscription = Magnetometer.addListener((data) => {
@@ -99,6 +103,7 @@ const App: React.FC = () => {
       angle = angle - 90; 
       if (angle < 0) angle = 360 + angle;
       setUser(prev => {
+          // Mise à jour fluide uniquement si changement significatif
           if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) };
           return prev;
       });
@@ -106,12 +111,13 @@ const App: React.FC = () => {
     return () => subscription && subscription.remove();
   }, []);
 
-  // RETOUR ARRIERE
+  // GESTION RETOUR ARRIERE ANDROID
   useEffect(() => {
     const backAction = () => {
       if (selectedOperatorId) { setSelectedOperatorId(null); return true; }
       if (showQRModal) { setShowQRModal(false); return true; }
       if (showScanner) { setShowScanner(false); return true; }
+      
       if (view === 'ops' || view === 'map') {
         Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]);
         return true;
@@ -144,13 +150,16 @@ const App: React.FC = () => {
     Object.values(connectionsRef.current).forEach((conn: any) => { if (conn.open) conn.send(data); });
   }, [user.id]);
 
+  // --- LOGIQUE CRITIQUE DE FUSION (ANTI-DOUBLON) ---
   const mergePeer = useCallback((newPeer: UserData) => {
     setPeers(prev => {
         const next = { ...prev };
+        // Si le trigramme existe déjà sous un autre ID (ancienne session), on supprime l'ancien
         const oldId = Object.keys(next).find(key => 
             next[key].callsign === newPeer.callsign && key !== newPeer.id
         );
         if (oldId) delete next[oldId];
+        
         next[newPeer.id] = newPeer;
         return next;
     });
@@ -162,7 +171,9 @@ const App: React.FC = () => {
 
     switch (data.type) {
       case 'UPDATE': case 'FULL': case 'UPDATE_USER':
-        if (data.user && data.user.id !== user.id) mergePeer(data.user);
+        if (data.user && data.user.id !== user.id) {
+             mergePeer(data.user);
+        }
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
@@ -226,6 +237,7 @@ const App: React.FC = () => {
       setBannedPeers(prev => [...prev, targetId]);
       if (conn) conn.close();
       delete connectionsRef.current[targetId];
+      // Suppression immédiate de la liste locale
       setPeers(prev => { const next = {...prev}; delete next[targetId]; return next; });
       setSelectedOperatorId(null);
       showToast("Utilisateur Banni");
@@ -242,12 +254,16 @@ const App: React.FC = () => {
       setSelectedOperatorId(null);
   };
 
+  // --- MIGRATION D'HÔTE (Préservée) ---
   const handleHostDisconnect = () => {
       if (user.role === OperatorRole.HOST) return;
       showToast("CONNEXION PERDUE - MIGRATION...", "error");
+      
       const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
       candidates.push(user);
+      // Tri par ancienneté pour élire le chef
       candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+      
       const newHost = candidates[0];
       if (newHost && newHost.id === user.id) {
           promoteToHost();
@@ -303,7 +319,11 @@ const App: React.FC = () => {
       call.on('stream', (rs) => audioService.playStream(rs));
     });
     
-    p.on('error', (err) => { if (err.type === 'peer-unavailable' || err.type === 'network') {} });
+    p.on('error', (err) => { 
+        if (err.type === 'peer-unavailable' || err.type === 'network') {
+            // Géré par handleHostDisconnect si c'était l'hôte
+        }
+    });
   }, [peers, user, handleData, showToast, silenceMode, pings, bannedPeers]);
 
   const connectToHost = useCallback((targetId: string) => {
@@ -329,7 +349,7 @@ const App: React.FC = () => {
   }, [user, handleData, showToast, hostId, view]);
 
   const startServices = async () => {
-    // BLOCAGE TANT QUE CONSENTEMENT NON DONNÉ
+    // SÉCURITÉ : On attend le consentement avant de lancer les services
     if (!hasConsent) return;
 
     await audioService.init();
@@ -354,6 +374,8 @@ const App: React.FC = () => {
       { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
       (loc) => {
         const { latitude, longitude, speed, heading, accuracy } = loc.coords;
+        
+        // FIX: Filtre Ghost GPS (Précision > 30m ignorée)
         if (accuracy && accuracy > 30) return;
 
         setUser(prev => {
@@ -370,7 +392,7 @@ const App: React.FC = () => {
     );
   };
 
-  // LANCEMENT SERVICES DÈS QUE CONSENTEMENT OK
+  // Lorsque le consentement est donné, on lance les services si l'utilisateur est déjà connecté
   useEffect(() => {
       if (hasConsent && user.callsign) {
           startServices();
@@ -382,10 +404,9 @@ const App: React.FC = () => {
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
     
-    // On met à jour l'user mais startServices attendra hasConsent
     setUser(prev => ({ ...prev, callsign: tri }));
     
-    // Si déjà consenti, on lance
+    // Si consentement déjà OK, on démarre
     if (hasConsent) {
         await startServices();
     }
@@ -602,8 +623,10 @@ const App: React.FC = () => {
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
       
-      {/* Intégration de la Modale de Consentement */}
-      <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
+      {/* Modale affichée conditionnellement si le composant est valide */}
+      {PrivacyConsentModal ? (
+        <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
+      ) : null}
 
       {view === 'login' ? renderLogin() :
        view === 'menu' ? renderMenu() :
@@ -767,3 +790,5 @@ const styles = StyleSheet.create({
   toast: { position: 'absolute', top: 50, alignSelf: 'center', backgroundColor: '#1e3a8a', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, zIndex: 9999 },
   toastText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
 });
+
+export default App;
