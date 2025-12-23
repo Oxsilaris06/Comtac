@@ -69,7 +69,6 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- RECONNEXION ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -88,7 +87,6 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  // --- AUDIO UI SYNC ---
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -96,7 +94,6 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
-  // ... Initializers ...
   useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
   useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
   useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
@@ -216,28 +213,6 @@ const App: React.FC = () => {
       setSelectedOperatorId(null);
   };
 
-  const handleHostDisconnect = () => {
-      if (user.role === OperatorRole.HOST) return;
-      showToast("CONNEXION PERDUE - MIGRATION...", "error");
-      const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
-      candidates.push(user);
-      candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-      const newHost = candidates[0];
-      if (newHost && newHost.id === user.id) {
-          promoteToHost();
-      } else if (newHost) {
-          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
-      }
-  };
-
-  const promoteToHost = () => {
-      setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
-      setHostId(user.id);
-      audioService.updateNotification(user.id);
-      showToast("JE SUIS LE NOUVEL HÔTE", "info");
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
-
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
     const myId = initialRole === OperatorRole.HOST ? generateShortId() : undefined;
@@ -253,9 +228,6 @@ const App: React.FC = () => {
       } else if (targetHostId) {
         connectToHost(targetHostId);
       }
-      
-      // FIX CRITIQUE : Au lancement de la connexion, on force la priorité Bluetooth
-      audioService.forceBluetoothPriority();
     });
 
     p.on('connection', (conn) => {
@@ -278,8 +250,6 @@ const App: React.FC = () => {
       if (!audioService.stream) return;
       call.answer(audioService.stream);
       call.on('stream', (rs) => audioService.playStream(rs));
-      // FIX CRITIQUE : Un appel entrant peut voler le focus. On le reprend.
-      setTimeout(() => audioService.forceBluetoothPriority(), 500);
     });
     
     p.on('error', (err) => { if (err.type === 'peer-unavailable' || err.type === 'network') {} });
@@ -290,6 +260,7 @@ const App: React.FC = () => {
     if (hostId && connectionsRef.current[hostId]) connectionsRef.current[hostId].close();
 
     setHostId(targetId);
+    audioService.updateNotification(targetId);
     
     const conn = peerRef.current.connect(targetId);
     connectionsRef.current[targetId] = conn;
@@ -299,16 +270,35 @@ const App: React.FC = () => {
       conn.send({ type: 'FULL', user: user });
       const call = peerRef.current!.call(targetId, audioService.stream!);
       call.on('stream', (rs) => audioService.playStream(rs));
-      
-      // FIX CRITIQUE : Une fois connecté au flux audio, on reprend la main sur les boutons
-      audioService.updateNotification(targetId);
-      setTimeout(() => audioService.forceBluetoothPriority(), 500);
     });
     
     conn.on('data', (data: any) => handleData(data, targetId));
-    conn.on('close', () => { if (view === 'ops' || view === 'map') handleHostDisconnect(); });
+    conn.on('close', () => { if (view === 'ops' || view === 'map') handleHostDisconnect(); // Migration Host
+                                else showToast("Déconnecté", "error"); });
     conn.on('error', () => handleHostDisconnect());
   }, [user, handleData, showToast, hostId, view]);
+
+  const handleHostDisconnect = () => {
+      if (user.role === OperatorRole.HOST) return;
+      showToast("CONNEXION PERDUE - MIGRATION...", "error");
+      const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
+      candidates.push(user);
+      candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+      const newHost = candidates[0];
+      if (newHost && newHost.id === user.id) {
+          promoteToHost();
+      } else if (newHost) {
+          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
+      }
+  };
+
+  const promoteToHost = () => {
+      setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
+      setHostId(user.id);
+      audioService.updateNotification(user.id);
+      showToast("JE SUIS LE NOUVEL HÔTE", "info");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
 
   const startServices = async () => {
     if (!hasConsent) return;
@@ -373,20 +363,12 @@ const App: React.FC = () => {
     setHostId(finalId);
     const role = OperatorRole.OPR;
     setUser(prev => ({ ...prev, role }));
-    
-    // FIX CRITIQUE : Avant de lancer la connexion, on s'assure que le service audio est en place
-    audioService.forceBluetoothPriority();
-    
     initPeer(role, finalId);
     setView('ops');
   };
 
   const handleScannerBarCodeScanned = ({ data }: any) => {
     setShowScanner(false);
-    
-    // FIX CRITIQUE : La caméra a probablement volé le focus audio/boutons. On le reprend BRUTALEMENT.
-    audioService.forceBluetoothPriority();
-    
     setHostInput(data);
     setTimeout(() => joinSession(data), 500);
   };
@@ -405,7 +387,6 @@ const App: React.FC = () => {
     </View>
   );
 
-  // ... (renderMenu identique) ...
   const renderMenu = () => (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.menuContainer}>
@@ -589,6 +570,7 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
+      {/* --- MODALE ACTION CORRIGÉE (Fuchsia) --- */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
@@ -628,7 +610,7 @@ const App: React.FC = () => {
         </TouchableOpacity>
       </Modal>
       
-      {/* ... autres modales (qr, scanner, ping) ... */}
+      {/* ... (Autres Modales) */}
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
