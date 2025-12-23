@@ -68,20 +68,19 @@ module.exports = function(config) {
   );
 };
 
-// --- PLUGIN 1 : Forcer la compatibilité de la vieille lib keyevent (FIX CHIRURGICAL) ---
+// --- PLUGIN 1 : Forcer la compatibilité de la vieille lib keyevent (FIX CHIRURGICAL & ROBUSTE) ---
 function withGradleFix(config) {
   return withProjectBuildGradle(config, async (config) => {
     const buildGradle = config.modResults.contents;
-    // On cible UNIQUEMENT react-native-keyevent pour ne pas casser le build de l'app principale
+    
+    // NOUVELLE STRATÉGIE : Utilisation de plugins.withId pour intervenir au bon moment
     const fix = `
 subprojects {
-    afterEvaluate { project ->
+    plugins.withId('com.android.library') {
         if (project.name.contains('react-native-keyevent')) {
-            if (project.hasProperty("android")) {
-                android {
-                    compileSdkVersion 34
-                    buildToolsVersion "34.0.0"
-                }
+            android {
+                compileSdkVersion 34
+                buildToolsVersion "34.0.0"
             }
         }
     }
