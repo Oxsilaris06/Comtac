@@ -146,6 +146,7 @@ function withMainActivityInjection(config) {
            }
       }
     }
+    
     config.modResults.contents = src;
     return config;
   });
@@ -224,6 +225,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 sendBroadcast(intent);
                 
                 // On consomme l'événement SEULEMENT pour Volume UP (pour éviter que le son monte)
+                // Pour les autres touches, on laisse passer pour que le système audio (InCall) réagisse aussi si besoin
                 if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
                     return true; 
                 }
