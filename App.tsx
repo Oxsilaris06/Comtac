@@ -21,6 +21,7 @@ import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
+// IMPORT MODALE
 import PrivacyConsentModal from './components/PrivacyConsentModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -60,6 +61,7 @@ const App: React.FC = () => {
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
   const [privatePeerId, setPrivatePeerId] = useState<string | null>(null);
 
+  // ETAT CONSENTEMENT
   const [hasConsent, setHasConsent] = useState(false);
 
   const peerRef = useRef<Peer | null>(null);
@@ -67,7 +69,7 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // ABONNEMENT DIRECT AUX CHANGEMENTS AUDIO (Remplace le setInterval)
+  // ABONNEMENT AUDIO
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -75,18 +77,21 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
+  // CHARGEMENT TRIGRAMME
   useEffect(() => {
     AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
       if (saved) setLoginInput(saved);
     });
   }, []);
 
+  // BATTERIE
   useEffect(() => {
     Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) })));
     const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) })));
     return () => sub && sub.remove();
   }, []);
 
+  // BOUSSOLE
   useEffect(() => {
     Magnetometer.setUpdateInterval(100);
     const subscription = Magnetometer.addListener((data) => {
@@ -101,6 +106,7 @@ const App: React.FC = () => {
     return () => subscription && subscription.remove();
   }, []);
 
+  // RETOUR ARRIERE
   useEffect(() => {
     const backAction = () => {
       if (selectedOperatorId) { setSelectedOperatorId(null); return true; }
@@ -323,6 +329,7 @@ const App: React.FC = () => {
   }, [user, handleData, showToast, hostId, view]);
 
   const startServices = async () => {
+    // BLOCAGE TANT QUE CONSENTEMENT NON DONNÉ
     if (!hasConsent) return;
 
     await audioService.init();
@@ -363,6 +370,7 @@ const App: React.FC = () => {
     );
   };
 
+  // LANCEMENT SERVICES DÈS QUE CONSENTEMENT OK
   useEffect(() => {
       if (hasConsent && user.callsign) {
           startServices();
@@ -374,8 +382,10 @@ const App: React.FC = () => {
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
     
+    // On met à jour l'user mais startServices attendra hasConsent
     setUser(prev => ({ ...prev, callsign: tri }));
     
+    // Si déjà consenti, on lance
     if (hasConsent) {
         await startServices();
     }
@@ -592,6 +602,7 @@ const App: React.FC = () => {
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
       
+      {/* Intégration de la Modale de Consentement */}
       <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
 
       {view === 'login' ? renderLogin() :
@@ -756,5 +767,3 @@ const styles = StyleSheet.create({
   toast: { position: 'absolute', top: 50, alignSelf: 'center', backgroundColor: '#1e3a8a', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, zIndex: 9999 },
   toastText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
 });
-
-export default App;
