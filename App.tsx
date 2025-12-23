@@ -15,7 +15,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Magnetometer } from 'expo-sensors';
-import NetInfo from '@react-native-community/netinfo'; // AJOUT CRITIQUE
+import NetInfo from '@react-native-community/netinfo';
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
@@ -62,31 +62,24 @@ const App: React.FC = () => {
   const [privatePeerId, setPrivatePeerId] = useState<string | null>(null);
 
   const [hasConsent, setHasConsent] = useState(false);
-  const [isOffline, setIsOffline] = useState(false); // État réseau
+  const [isOffline, setIsOffline] = useState(false);
 
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<Record<string, any>>({});
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- RECONNEXION MILSPEC ---
+  // --- RECONNEXION ---
   useEffect(() => {
-    // Surveillance réseau
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
-      
-      // Si on passe de Offline à Online et qu'on était connecté
       if (isOffline && !offline && view !== 'login' && hostId) {
-          console.log("[NETWORK] Reconnexion détectée. Reboot PeerJS...");
           showToast("Réseau retrouvé. Reconnexion...", "info");
-          
-          // On attend 2s que l'interface réseau soit stable
           setTimeout(() => {
-              // On garde le même ID si possible (Hôte) ou on se reconnecte au chef
               if (user.role === OperatorRole.HOST) {
-                  initPeer(OperatorRole.HOST); // Reboot Host
+                  initPeer(OperatorRole.HOST); 
               } else {
-                  initPeer(OperatorRole.OPR, hostId); // Reconnect to Host
+                  initPeer(OperatorRole.OPR, hostId); 
               }
           }, 2000);
       }
@@ -95,7 +88,7 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  // Reste du code inchangé...
+  // --- AUDIO SUBSCRIPTION ---
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -103,6 +96,7 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
+  // --- INITIALIZERS ---
   useEffect(() => {
     AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
       if (saved) setLoginInput(saved);
@@ -403,10 +397,7 @@ const App: React.FC = () => {
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
     
     setUser(prev => ({ ...prev, callsign: tri }));
-    
-    if (hasConsent) {
-        await startServices();
-    }
+    if (hasConsent) await startServices();
     setView('menu');
   };
 
@@ -494,7 +485,6 @@ const App: React.FC = () => {
           </SafeAreaView>
           {silenceMode && (<View style={styles.silenceBanner}><Text style={styles.silenceText}>SILENCE RADIO</Text></View>)}
           {privatePeerId && (<View style={[styles.silenceBanner, {backgroundColor: '#a855f7'}]}><Text style={styles.silenceText}>CANAL PRIVÉ ACTIF</Text></View>)}
-          {/* Alerte Réseau */}
           {isOffline && (<View style={[styles.silenceBanner, {backgroundColor: '#ef4444'}]}><Text style={styles.silenceText}>CONNEXION PERDUE - RECONNEXION...</Text></View>)}
       </View>
 
@@ -624,7 +614,7 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      {/* --- MODALES --- */}
+      {/* --- MODALE ACTION OPÉRATEUR CORRIGÉE --- */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
@@ -636,12 +626,18 @@ const App: React.FC = () => {
                <Text style={[styles.modalTitle, {color: 'white'}]}>ACTION OPÉRATEUR</Text>
                <Text style={{color: '#a1a1aa', marginBottom: 20}}>{peers[selectedOperatorId || '']?.callsign || 'Inconnu'}</Text>
                
-               <TouchableOpacity onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} style={[styles.modalBtn, {backgroundColor: '#3b82f6', marginBottom: 10, width: '100%'}]}>
+               <TouchableOpacity 
+                   onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} 
+                   style={[styles.modalBtn, {backgroundColor: '#c026d3', marginBottom: 10, width: '100%'}]}
+               >
                    <Text style={{color: 'white', fontWeight: 'bold'}}>APPEL PRIVÉ</Text>
                </TouchableOpacity>
                
                {user.role === OperatorRole.HOST && (
-                   <TouchableOpacity onPress={() => selectedOperatorId && handleKickUser(selectedOperatorId)} style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 10, width: '100%'}]}>
+                   <TouchableOpacity 
+                       onPress={() => selectedOperatorId && handleKickUser(selectedOperatorId)} 
+                       style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 10, width: '100%'}]}
+                   >
                         <Text style={{color: 'white', fontWeight: 'bold'}}>BANNIR / KICK</Text>
                    </TouchableOpacity>
                )}
