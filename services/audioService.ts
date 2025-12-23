@@ -1,69 +1,63 @@
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
 import { Platform } from 'react-native';
 import RNSoundLevel from 'react-native-sound-level';
-import MusicControl, { Command } from 'react-native-music-control';
-import { VolumeManager } from 'react-native-volume-manager';
 import InCallManager from 'react-native-incall-manager';
+import RNCallKeep from 'react-native-callkeep';
 import { headsetService } from './headsetService';
+import uuid from 'react-native-uuid';
+
+// UUID Constant pour la session d'appel
+const CALL_UUID = '00000000-0000-0000-0000-000000000001';
 
 class AudioService {
   stream: MediaStream | null = null;
   remoteStreams: MediaStream[] = []; 
   isTx: boolean = false;
-  mode: 'ptt' | 'vox' = 'ptt'; // Défaut PTT
+  mode: 'ptt' | 'vox' = 'ptt';
   
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
 
   currentRoomId: string = 'Déconnecté';
-  keepAliveTimer: any = null;
-
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
 
   async init(): Promise<boolean> {
     try {
-      // 1. Audio / Micro (OFF)
+      // 1. Initialisation Audio
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
       this.setTx(false);
-      this.mode = 'ptt';
 
-      // 2. Commandes Physiques (Priorité Absolue via Accessibilité)
+      // 2. Setup CallKeep (Le cœur du système)
+      this.setupCallKeep();
+
+      // 3. Liaison HeadsetService (Backup Physique Volume Up)
+      // HeadsetService continue d'écouter le Volume Up via Accessibilité
       headsetService.setCommandCallback((source) => {
+          console.log('[AudioService] Physical Command:', source);
           this.toggleVox(); 
       });
-      
-      // 3. Routage Audio
+
+      // 4. Routage Audio (Géré par InCallManager + CallKeep)
       headsetService.setConnectionCallback((isConnected, type) => {
-          console.log(`[Audio] Route Update: ${type}`);
           if(isConnected) {
               InCallManager.setForceSpeakerphoneOn(false);
-              this.updateNotification(this.currentRoomId, `Casque: ${type}`);
           } else {
               InCallManager.setForceSpeakerphoneOn(true);
-              this.updateNotification(this.currentRoomId, `Haut-Parleur`);
           }
       });
 
-      // 4. Configuration Audio (Mode COMMUNICATION assumé)
+      // 5. Config Initiale
       try {
-          // On démarre directement en mode Audio (HFP)
-          // On ne se bat plus pour le mode Media.
           InCallManager.start({ media: 'audio' }); 
-          InCallManager.setForceSpeakerphoneOn(true); // Défaut
+          InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setKeepScreenOn(true); 
-          await VolumeManager.setVolume(1.0); 
       } catch (e) { console.log("Audio Config Error:", e); }
-
-      // 5. Notification Visuelle (Juste pour l'affichage)
-      this.setupMusicControl();
 
       // 6. Vox
       this.setupVox();
-      
-      // Pas de KeepAlive agressif ici, inutile en mode Communication
-      
+
       return true;
     } catch (err) {
       console.error("[Audio] Init Error:", err);
@@ -71,66 +65,87 @@ class AudioService {
     }
   }
 
-  public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
-      this.listeners.push(callback);
-      callback(this.mode);
-      return () => { this.listeners = this.listeners.filter(l => l !== callback); };
-  }
-
-  private notifyListeners() {
-      this.listeners.forEach(cb => cb(this.mode));
-  }
-
-  // --- UI ONLY : NOTIFICATION ---
-  private setupMusicControl() {
+  private setupCallKeep() {
       try {
-          if (Platform.OS === 'android') {
-             // On active le background mode pour garder l'app en vie
-             MusicControl.enableBackgroundMode(true);
-             
-             // On ne mappe plus les commandes ici car elles sont peu fiables en appel.
-             // On compte sur HeadsetService (Accessibilité) pour le travail réel.
-             // On garde juste play/pause pour la forme.
-             MusicControl.enableControl('play', true);
-             MusicControl.enableControl('pause', true);
-             MusicControl.enableControl('closeNotification', false, { when: 'never' });
-             
-             this.updateNotification('Prêt');
-          }
-      } catch (e) { }
+          RNCallKeep.setup({
+              ios: { appName: 'ComTac' },
+              android: {
+                  alertTitle: 'Permissions requises',
+                  alertDescription: 'ComTac nécessite l\'accès aux appels pour gérer le Bluetooth',
+                  cancelButton: 'Annuler',
+                  okButton: 'OK',
+                  imageName: 'phone_account_icon',
+                  additionalPermissions: [],
+                  // CRITIQUE : Self Managed pour ne pas remplacer l'appli téléphone native
+                  selfManaged: true, 
+                  foregroundService: {
+                      channelId: 'com.tactical.comtac',
+                      channelName: 'Foreground Service',
+                      notificationTitle: 'ComTac Actif',
+                      notificationIcon: 'Path to the resource icon of the notification',
+                  },
+              },
+          });
+
+          // Écouteur MUTE du casque Bluetooth (HFP)
+          // Quand on appuie sur le bouton du casque en mode appel, ça envoie un Toggle Mute
+          RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted }) => {
+              // Muted = Micro coupé (PTT)
+              // Unmuted = Micro ouvert (VOX)
+              const newMode = !muted ? 'vox' : 'ptt';
+              if (this.mode !== newMode) {
+                  this.toggleVox();
+              }
+          });
+
+          RNCallKeep.addEventListener('endCall', () => {
+             // Si l'utilisateur raccroche via l'interface système, on quitte
+             // (Logique à connecter avec App.tsx si besoin)
+          });
+
+          // On lance l'appel fictif pour activer le mode HFP
+          this.startCallSession();
+
+      } catch (e) {
+          console.log("CallKeep Setup Error:", e);
+      }
+  }
+
+  public startCallSession() {
+      // On déclare un appel sortant pour activer le profil Bluetooth HFP
+      try {
+          RNCallKeep.startCall(CALL_UUID, 'ComTac', 'ComTac Radio');
+          RNCallKeep.setMutedCall(CALL_UUID, true); // On commence en MUTE (PTT)
+      } catch(e) {
+          console.log("Start Call Error", e);
+      }
   }
 
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
+    // Synchro avec CallKeep (l'état Mute du système)
+    const isMuted = this.mode === 'ptt';
+    RNCallKeep.setMutedCall(CALL_UUID, isMuted);
+
+    // Gestion Micro Physique
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
 
-    this.updateNotification();
     this.notifyListeners();
     return this.mode === 'vox';
   }
 
-  updateNotification(roomId?: string, extraInfo?: string) {
-      if (roomId) this.currentRoomId = roomId;
-      
-      const isVox = this.mode === 'vox';
-      const text = isVox ? 'VOX ACTIF' : 'PTT (Manuel)';
-      const color = isVox ? 0xFFef4444 : 0xFF3b82f6;
-      const subtitle = extraInfo || 'Mode Tactique';
+  // --- UI SUBSCRIPTION ---
+  public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
+      this.listeners.push(callback);
+      return () => { this.listeners = this.listeners.filter(l => l !== callback); };
+  }
 
-      MusicControl.setNowPlaying({
-          title: `Salon #${this.currentRoomId}`,
-          artist: `ComTac : ${text}`,
-          album: subtitle, 
-          duration: 0, 
-          color: color,
-          isPlaying: true, 
-          isSeekable: false,
-          notificationIcon: 'icon' 
-      });
+  private notifyListeners() {
+      this.listeners.forEach(cb => cb(this.mode));
   }
 
   private setupVox() {
