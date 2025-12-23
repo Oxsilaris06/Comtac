@@ -4,7 +4,6 @@ import RNSoundLevel from 'react-native-sound-level';
 import MusicControl, { Command } from 'react-native-music-control';
 import { VolumeManager } from 'react-native-volume-manager';
 import InCallManager from 'react-native-incall-manager';
-// Import du nouveau module dédié
 import { headsetService } from './headsetService';
 
 class AudioService {
@@ -21,26 +20,25 @@ class AudioService {
   lastToggleTime: number = 0;
   keepAliveTimer: any = null;
 
+  // Système d'abonnement pour l'UI
+  private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
+
   async init(): Promise<boolean> {
     try {
-      // 1. Audio / Micro
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
       this.setTx(false);
 
-      // 2. Initialisation du Module Casque Dédié
-      // On lui donne le callback : "Quand tu détectes un truc, lance safeToggle()"
+      // Liaison avec HeadsetService
       headsetService.setCommandCallback((source) => {
-          console.log('[AudioService] Command received from:', source);
           this.safeToggle();
       });
       
-      // Optionnel : Réagir à la connexion du casque
       headsetService.setConnectionCallback((isConnected, type) => {
           if(isConnected) this.updateNotification(this.currentRoomId, `Casque Connecté (${type})`);
       });
 
-      // 3. Configuration Audio (Boost Sonore)
+      // Configuration Audio Boost
       try {
           InCallManager.start({ media: 'audio' }); 
           InCallManager.setForceSpeakerphoneOn(true);
@@ -49,13 +47,8 @@ class AudioService {
           await VolumeManager.setVolume(1.0); 
       } catch (e) { console.log("Audio Config Error:", e); }
 
-      // 4. Setup MusicControl (Boutons Bluetooth & Background)
       this.setupMusicControl();
-
-      // 5. Triggers VOX
       this.setupVox();
-
-      // 6. KeepAlive (Heartbeat)
       this.startKeepAlive();
 
       return true;
@@ -65,15 +58,25 @@ class AudioService {
     }
   }
 
-  // --- GESTION BLUETOOTH / BACKGROUND (MusicControl) ---
+  // --- ABONNEMENT UI ---
+  public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
+      this.listeners.push(callback);
+      return () => {
+          this.listeners = this.listeners.filter(l => l !== callback);
+      };
+  }
+
+  private notifyListeners() {
+      this.listeners.forEach(cb => cb(this.mode));
+  }
+
+  // --- GESTION NOTIFICATION & ECRAN VERROUILLÉ ---
   private setupMusicControl() {
       try {
           if (Platform.OS === 'android') {
-             // Reset pour garantir la prise de focus
              MusicControl.stopControl();
              MusicControl.enableBackgroundMode(true);
              
-             // Activation de TOUTES les commandes pour capter n'importe quel clic casque
              const commands = [
                  'play', 'pause', 'stop', 'togglePlayPause', 
                  'nextTrack', 'previousTrack', 
@@ -83,11 +86,8 @@ class AudioService {
              commands.forEach(cmd => MusicControl.enableControl(cmd as any, true));
              
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
-             
-             // Gestion agressive du Focus Audio
              MusicControl.handleAudioInterruptions(true);
 
-             // On mappe TOUT vers la bascule unique via safeToggle
              commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => this.safeToggle()));
 
              this.updateNotification('Prêt');
@@ -95,10 +95,8 @@ class AudioService {
       } catch (e) { }
   }
 
-  // --- FONCTION DE BASCULE SÉCURISÉE (ANTI-REBOND GLOBAL) ---
   private safeToggle() {
       const now = Date.now();
-      // Délai de 500ms entre deux bascules pour éviter les doubles déclenchements involontaires
       if (now - this.lastToggleTime > 500) { 
           this.toggleVox();
           this.lastToggleTime = now;
@@ -132,7 +130,7 @@ class AudioService {
           album: subtitle, 
           duration: 0, 
           color: color,
-          isPlaying: true, 
+          isPlaying: true,
           isSeekable: false,
           notificationIcon: 'icon' 
       });
@@ -156,13 +154,13 @@ class AudioService {
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // Sécurité PTT : Coupure immédiate
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
 
     this.updateNotification();
+    this.notifyListeners(); // Notifie l'App instantanément
     return this.mode === 'vox';
   }
 
