@@ -2,7 +2,6 @@ import { NativeEventEmitter, NativeModules } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 import { VolumeManager } from 'react-native-volume-manager';
 
-// Mapping des codes touches
 const KEY_CODES = {
     VOLUME_UP: 24,
     VOLUME_DOWN: 25,
@@ -50,7 +49,6 @@ class HeadsetService {
             const current = data.selectedAudioDevice;
             const connected = current === 'Bluetooth' || current === 'WiredHeadset';
 
-            // Mise à jour de l'état interne
             this.isHeadsetConnected = connected;
             
             // Notification au service audio pour le routage
