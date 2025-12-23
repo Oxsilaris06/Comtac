@@ -81,15 +81,30 @@ function withKeyEventBuildGradleFix(config) {
       if (fs.existsSync(file)) {
         let contents = fs.readFileSync(file, 'utf8');
         
-        // Remplacement brutal des versions obsolètes par les versions modernes (SDK 34)
-        // Cela permet de compiler du code Java moderne sans erreur
-        if (contents.includes('compileSdkVersion')) {
-            contents = contents.replace(/compileSdkVersion\s+\d+/g, 'compileSdkVersion 34');
-            contents = contents.replace(/buildToolsVersion\s+".*"/g, 'buildToolsVersion "34.0.0"');
-            contents = contents.replace(/targetSdkVersion\s+\d+/g, 'targetSdkVersion 33');
-            
-            fs.writeFileSync(file, contents);
+        // Remplacement AGRESSIF (Regex multiline) : On remplace toute la ligne
+        // Peu importe si c'est "compileSdkVersion 28" ou "compileSdkVersion rootProject.ext..."
+        // On force 34 pour être compatible avec Java 17+
+        contents = contents.replace(/compileSdkVersion\s+.*$/gm, 'compileSdkVersion 34');
+        contents = contents.replace(/buildToolsVersion\s+.*$/gm, 'buildToolsVersion "34.0.0"');
+        contents = contents.replace(/targetSdkVersion\s+.*$/gm, 'targetSdkVersion 33');
+        contents = contents.replace(/minSdkVersion\s+.*$/gm, 'minSdkVersion 24');
+        
+        // On ajoute aussi la compatibilité Java explicitement dans le bloc android si manquant
+        if (!contents.includes('compileOptions')) {
+            const compileOptions = `
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+`;
+            // Insérer avant la fin du bloc android
+            contents = contents.replace(/android\s*{/, `android {${compileOptions}`);
         }
+
+        fs.writeFileSync(file, contents);
+        console.log("✅ [FIX] react-native-keyevent build.gradle patched successfully!");
+      } else {
+        console.warn("⚠️ [FIX] react-native-keyevent build.gradle NOT FOUND at: " + file);
       }
       return config;
     },
