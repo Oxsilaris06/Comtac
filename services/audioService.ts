@@ -4,8 +4,8 @@ import RNSoundLevel from 'react-native-sound-level';
 import MusicControl, { Command } from 'react-native-music-control';
 import { VolumeManager } from 'react-native-volume-manager';
 import InCallManager from 'react-native-incall-manager';
-// On garde KeyEvent en backup pour le foreground
-import KeyEvent from 'react-native-keyevent';
+// Import du nouveau module dédié
+import { headsetService } from './headsetService';
 
 class AudioService {
   stream: MediaStream | null = null;
@@ -18,10 +18,6 @@ class AudioService {
   voxTimer: any = null;
 
   currentRoomId: string = 'Déconnecté';
-  
-  // Logique de contrôle
-  lastVolume: number = 0;
-  lastVolumeUpTime: number = 0;
   lastToggleTime: number = 0;
   keepAliveTimer: any = null;
 
@@ -32,13 +28,20 @@ class AudioService {
       this.stream = stream;
       this.setTx(false);
 
-      // 2. Setup KeyEvent (Boutons Physiques Foreground)
-      this.setupKeyEvents();
+      // 2. Initialisation du Module Casque Dédié
+      // On lui donne le callback : "Quand tu détectes un truc, lance safeToggle()"
+      headsetService.setCommandCallback((source) => {
+          console.log('[AudioService] Command received from:', source);
+          this.safeToggle();
+      });
+      
+      // Optionnel : Réagir à la connexion du casque
+      headsetService.setConnectionCallback((isConnected, type) => {
+          if(isConnected) this.updateNotification(this.currentRoomId, `Casque Connecté (${type})`);
+      });
 
       // 3. Configuration Audio (Boost Sonore)
       try {
-          // On force le mode AUDIO (et non video) pour essayer de garder un profil mixte
-          // Tout en forçant le Speakerphone pour la puissance
           InCallManager.start({ media: 'audio' }); 
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
@@ -47,12 +50,10 @@ class AudioService {
       } catch (e) { console.log("Audio Config Error:", e); }
 
       // 4. Setup MusicControl (Boutons Bluetooth & Background)
-      // IMPORTANT : On le fait APRÈS InCallManager pour reprendre le focus des boutons
       this.setupMusicControl();
 
-      // 5. Triggers
+      // 5. Triggers VOX
       this.setupVox();
-      this.setupVolumeTrigger();
 
       // 6. KeepAlive (Heartbeat)
       this.startKeepAlive();
@@ -64,23 +65,7 @@ class AudioService {
     }
   }
 
-  // --- GESTION BOUTONS PHYSIQUES (FOREGROUND) ---
-  private setupKeyEvents() {
-      // Écoute directe des touches matérielles quand l'app est active
-      const RELEVANT_KEYS = [24, 25, 79, 85, 87, 88, 126, 127]; // VolUp, VolDown, Headset, Media...
-      KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-          if (RELEVANT_KEYS.includes(keyEvent.keyCode)) {
-              // Pour KeyEvent, on filtre manuellement le Volume Down ici si besoin, 
-              // mais pour la bascule VOX on veut souvent juste un bouton d'action.
-              // Ici on laisse la bascule se faire pour les boutons médias/casque.
-              if (keyEvent.keyCode !== 25) { // On ignore Volume Down (25) pour la bascule
-                  this.safeToggle();
-              }
-          }
-      });
-  }
-
-  // --- GESTION BLUETOOTH / BACKGROUND ---
+  // --- GESTION BLUETOOTH / BACKGROUND (MusicControl) ---
   private setupMusicControl() {
       try {
           if (Platform.OS === 'android') {
@@ -91,7 +76,7 @@ class AudioService {
              // Activation de TOUTES les commandes pour capter n'importe quel clic casque
              const commands = [
                  'play', 'pause', 'stop', 'togglePlayPause', 
-                 'nextTrack', 'previousTrack', // Souvent les mieux gérés par les casques
+                 'nextTrack', 'previousTrack', 
                  'seekForward', 'seekBackward',
                  'skipForward', 'skipBackward'
              ];
@@ -102,44 +87,11 @@ class AudioService {
              // Gestion agressive du Focus Audio
              MusicControl.handleAudioInterruptions(true);
 
-             // On mappe TOUT vers la bascule unique
+             // On mappe TOUT vers la bascule unique via safeToggle
              commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => this.safeToggle()));
 
-             // On initialise l'état
              this.updateNotification('Prêt');
           }
-      } catch (e) { }
-  }
-
-  // --- GESTION VOLUME (DOUBLE CLIC VOLUME UP) ---
-  private setupVolumeTrigger() {
-      try {
-          VolumeManager.getVolume().then(v => { this.lastVolume = typeof v === 'number' ? v : 0.5; });
-
-          VolumeManager.addVolumeListener((result) => {
-              const currentVol = result.volume;
-              const now = Date.now();
-
-              // CORRECTIF : On ne réagit que si le volume AUGMENTE (Up)
-              // Ou si on est déjà au max (1) et qu'on essaie encore d'augmenter (reste à 1)
-              const isVolumeUp = currentVol > this.lastVolume || (currentVol === 1 && this.lastVolume === 1);
-
-              if (isVolumeUp) {
-                  // Si clic rapide (<600ms) = DOUBLE CLIC
-                  if (now - this.lastVolumeUpTime < 600) {
-                      this.safeToggle(); // Action !
-                      this.lastVolumeUpTime = 0; // Reset
-                      
-                      // On remet le volume à fond pour annuler l'effet et préparer le prochain clic
-                      setTimeout(() => VolumeManager.setVolume(1.0), 100);
-                  } else {
-                      // Premier clic
-                      this.lastVolumeUpTime = now;
-                  }
-              }
-              
-              this.lastVolume = currentVol;
-          });
       } catch (e) { }
   }
 
@@ -166,26 +118,25 @@ class AudioService {
       } catch (e) { }
   }
 
-  updateNotification(roomId?: string) {
+  updateNotification(roomId?: string, extraInfo?: string) {
       if (roomId) this.currentRoomId = roomId;
       
       const isVox = this.mode === 'vox';
       const text = isVox ? 'VOX ACTIF' : 'PTT (Manuel)';
       const color = isVox ? 0xFFef4444 : 0xFF3b82f6;
+      const subtitle = extraInfo || 'Mode Tactique';
 
       MusicControl.setNowPlaying({
           title: `Salon #${this.currentRoomId}`,
           artist: `ComTac : ${text}`,
-          album: 'Mode Tactique', 
+          album: subtitle, 
           duration: 0, 
           color: color,
-          // CRITIQUE : Toujours "Playing" pour que le Bluetooth reste actif
           isPlaying: true, 
           isSeekable: false,
           notificationIcon: 'icon' 
       });
       
-      // On force l'état PLAYING pour le système
       MusicControl.updatePlayback({
           state: MusicControl.STATE_PLAYING,
           elapsedTime: 0 
@@ -195,7 +146,6 @@ class AudioService {
   private startKeepAlive() {
       if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
       this.keepAliveTimer = setInterval(() => {
-          // On rafraîchit l'état "Lecture" toutes les 5s pour empêcher le système de tuer le service
           MusicControl.updatePlayback({
               state: MusicControl.STATE_PLAYING,
               elapsedTime: Date.now() 
@@ -206,7 +156,7 @@ class AudioService {
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // Si on repasse en PTT, on COUPE le micro immédiatement (Sécurité)
+    // Sécurité PTT : Coupure immédiate
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
