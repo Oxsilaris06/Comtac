@@ -18,21 +18,19 @@ class AudioService {
 
   currentRoomId: string = 'Déconnecté';
   keepAliveTimer: any = null;
-  lastToggleTime: number = 0;
 
-  // Listeners pour l'UI
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
 
   async init(): Promise<boolean> {
     try {
-      // 1. Démarrage Micro (DÉSACTIVÉ PAR DÉFAUT)
+      // 1. Audio / Micro (MICRO OFF PAR DEFAUT)
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
-      this.setTx(false); // <--- CRITIQUE : MICRO OFF
+      this.setTx(false);
 
-      // 2. Liaison HeadsetService (Commandes Hardware)
+      // 2. Liaison HeadsetService (C'est lui qui déclenche tout)
       headsetService.setCommandCallback((source) => {
-          this.safeToggle();
+          this.toggleVox(); // Action unique
       });
       
       headsetService.setConnectionCallback((isConnected, type) => {
@@ -41,7 +39,6 @@ class AudioService {
 
       // 3. Configuration Audio (Boost & Priorité)
       try {
-          // On force 'audio' pour la compatibilité, mais avec Speakerphone
           InCallManager.start({ media: 'audio' }); 
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
@@ -50,7 +47,6 @@ class AudioService {
       } catch (e) { console.log("Audio Config Error:", e); }
 
       // 4. Setup MusicControl (PRIORITÉ BLUETOOTH)
-      // Doit être fait APRES InCallManager
       this.setupMusicControl();
 
       // 5. Vox & KeepAlive
@@ -80,10 +76,9 @@ class AudioService {
   private setupMusicControl() {
       try {
           if (Platform.OS === 'android') {
-             MusicControl.stopControl(); // Reset propre
+             MusicControl.stopControl();
              MusicControl.enableBackgroundMode(true);
              
-             // On active TOUT pour capter n'importe quelle télécommande
              const commands = [
                  'play', 'pause', 'stop', 'togglePlayPause', 
                  'nextTrack', 'previousTrack', 
@@ -95,20 +90,14 @@ class AudioService {
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
              MusicControl.handleAudioInterruptions(true);
 
-             // Mapping Universel
-             commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => this.safeToggle()));
+             // IMPORTANT : On redirige tout vers headsetService pour déduplication
+             commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => {
+                 headsetService.triggerCommand('BLUETOOTH_' + cmd);
+             }));
 
              this.updateNotification('Prêt');
           }
       } catch (e) { }
-  }
-
-  private safeToggle() {
-      const now = Date.now();
-      if (now - this.lastToggleTime > 400) { 
-          this.toggleVox();
-          this.lastToggleTime = now;
-      }
   }
 
   private setupVox() {
@@ -138,7 +127,7 @@ class AudioService {
           album: subtitle, 
           duration: 0, 
           color: color,
-          isPlaying: true, // TOUJOURS TRUE pour garder le focus AVRCP
+          isPlaying: true, 
           isSeekable: false,
           notificationIcon: 'icon' 
       });
@@ -162,14 +151,13 @@ class AudioService {
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // WORKFLOW : Si PTT, on coupe tout de suite
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
 
     this.updateNotification();
-    this.notifyListeners(); // Mise à jour UI instantanée
+    this.notifyListeners();
     return this.mode === 'vox';
   }
 
@@ -179,6 +167,12 @@ class AudioService {
     if (this.stream) {
       this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
+  }
+
+  muteIncoming(mute: boolean) {
+      this.remoteStreams.forEach(rs => {
+          rs.getAudioTracks().forEach(t => { t.enabled = !mute; });
+      });
   }
 
   playStream(remoteStream: MediaStream) { 
