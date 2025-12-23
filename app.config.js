@@ -74,9 +74,10 @@ function withGradleFix(config) {
     const buildGradle = config.modResults.contents;
     // Ce script force toutes les sous-dépendances (comme react-native-keyevent)
     // à utiliser le SDK 34, contournant l'erreur "compileSdkVersion to 30 or above"
+    // MODIFICATION : Ajout d'une vérification 'state.executed' pour éviter le crash Gradle
     const fix = `
 subprojects {
-    afterEvaluate { project ->
+    def androidConfig = {
         if (project.hasProperty("android")) {
             android {
                 compileSdkVersion 34
@@ -86,6 +87,12 @@ subprojects {
                 }
             }
         }
+    }
+
+    if (project.state.executed) {
+        androidConfig()
+    } else {
+        project.afterEvaluate(androidConfig)
     }
 }
 `;
