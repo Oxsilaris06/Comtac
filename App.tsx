@@ -21,6 +21,8 @@ import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
+// IMPORT DU NOUVEAU COMPOSANT
+import PrivacyConsentModal from './components/PrivacyConsentModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
 
@@ -50,24 +52,23 @@ const App: React.FC = () => {
   const [mapMode, setMapMode] = useState<'dark' | 'light' | 'satellite'>('dark');
   const [showTrails, setShowTrails] = useState(true);
   const [showPings, setShowPings] = useState(true);
-  
-  // VOX State (Initialisé à false)
   const [voxActive, setVoxActive] = useState(false);
   
   const [showQRModal, setShowQRModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPingModal, setShowPingModal] = useState(false);
-  
   const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(null);
   const [tempPingLoc, setTempPingLoc] = useState<any>(null);
   const [privatePeerId, setPrivatePeerId] = useState<string | null>(null);
+
+  // État pour savoir si le consentement est validé
+  const [hasConsent, setHasConsent] = useState(false);
 
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<Record<string, any>>({});
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // Sync VOX UI avec Service (Polling léger pour capter le changement via Volume Button)
   useEffect(() => {
       const interval = setInterval(() => {
           if (audioService.mode === 'vox' !== voxActive) {
@@ -128,7 +129,7 @@ const App: React.FC = () => {
       if (peerRef.current) peerRef.current.destroy();
       setPeers({}); setPings([]); setHostId(''); setView('login');
       audioService.setTx(false); setVoxActive(false);
-      audioService.updateNotification("Déconnecté"); // Reset notif
+      audioService.updateNotification("Déconnecté");
       setBannedPeers([]);
   };
 
@@ -255,7 +256,7 @@ const App: React.FC = () => {
   const promoteToHost = () => {
       setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
       setHostId(user.id);
-      audioService.updateNotification(user.id); // Update notif avec nouvel ID
+      audioService.updateNotification(user.id);
       showToast("JE SUIS LE NOUVEL HÔTE", "info");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
@@ -270,7 +271,7 @@ const App: React.FC = () => {
       setUser(prev => ({ ...prev, id: pid }));
       if (initialRole === OperatorRole.HOST) {
         setHostId(pid);
-        audioService.updateNotification(pid); // NOTIF HOST
+        audioService.updateNotification(pid);
         showToast(`HÔTE: ${pid}`);
       } else if (targetHostId) {
         connectToHost(targetHostId);
@@ -307,7 +308,7 @@ const App: React.FC = () => {
     if (hostId && connectionsRef.current[hostId]) connectionsRef.current[hostId].close();
 
     setHostId(targetId);
-    audioService.updateNotification(targetId); // NOTIF CLIENT
+    audioService.updateNotification(targetId);
     
     const conn = peerRef.current.connect(targetId);
     connectionsRef.current[targetId] = conn;
@@ -325,6 +326,9 @@ const App: React.FC = () => {
   }, [user, handleData, showToast, hostId, view]);
 
   const startServices = async () => {
+    // SÉCURITÉ : On attend le consentement avant de lancer les services
+    if (!hasConsent) return;
+
     await audioService.init();
     if (!permission?.granted) await requestPermission();
 
@@ -363,12 +367,24 @@ const App: React.FC = () => {
     );
   };
 
+  // Lorsque le consentement est donné, on lance les services si l'utilisateur est déjà connecté
+  useEffect(() => {
+      if (hasConsent && user.callsign) {
+          startServices();
+      }
+  }, [hasConsent]);
+
   const handleLogin = async () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
+    
+    // On met à jour l'utilisateur mais on attend le consentement pour startServices
     setUser(prev => ({ ...prev, callsign: tri }));
-    await startServices();
+    
+    if (hasConsent) {
+        await startServices();
+    }
     setView('menu');
   };
 
@@ -582,6 +598,9 @@ const App: React.FC = () => {
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
       
+      {/* Ajout du gestionnaire de consentement - S'affiche en premier si besoin */}
+      <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
+
       {view === 'login' ? renderLogin() :
        view === 'menu' ? renderMenu() :
        renderDashboard()}
