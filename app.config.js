@@ -1,8 +1,10 @@
-const { withAndroidManifest, withProjectBuildGradle, withMainActivity } = require('@expo/config-plugins');
+const { withAndroidManifest, withMainActivity, withDangerousMod } = require('@expo/config-plugins');
+const fs = require('fs');
+const path = require('path');
 
 module.exports = function(config) {
-  // On chaîne les plugins : Gradle Fix (Build) -> Key Event (Fonction) -> Music Control (Service)
-  return withGradleFix(
+  // On chaîne les plugins : Patch Fichier (Disk) -> Key Event (Fonction) -> Music Control (Service)
+  return withKeyEventBuildGradleFix(
     withKeyEventInjection(
       withMusicControlFix({
         name: "COM TAC v14",
@@ -68,30 +70,30 @@ module.exports = function(config) {
   );
 };
 
-// --- PLUGIN 1 : Forcer la compatibilité de la vieille lib keyevent (FIX CHIRURGICAL & ROBUSTE) ---
-function withGradleFix(config) {
-  return withProjectBuildGradle(config, async (config) => {
-    const buildGradle = config.modResults.contents;
-    
-    // NOUVELLE STRATÉGIE : Utilisation de plugins.withId pour intervenir au bon moment
-    const fix = `
-subprojects {
-    plugins.withId('com.android.library') {
-        if (project.name.contains('react-native-keyevent')) {
-            android {
-                compileSdkVersion 34
-                buildToolsVersion "34.0.0"
-            }
+// --- PLUGIN 1 : Patch physique du fichier build.gradle de la librairie (FIX ULTIME) ---
+function withKeyEventBuildGradleFix(config) {
+  return withDangerousMod(config, [
+    'android',
+    async (config) => {
+      // Chemin vers le fichier build.gradle de la librairie dans node_modules
+      const file = path.join(config.modRequest.projectRoot, 'node_modules', 'react-native-keyevent', 'android', 'build.gradle');
+      
+      if (fs.existsSync(file)) {
+        let contents = fs.readFileSync(file, 'utf8');
+        
+        // Remplacement brutal des versions obsolètes par les versions modernes (SDK 34)
+        // Cela permet de compiler du code Java moderne sans erreur
+        if (contents.includes('compileSdkVersion')) {
+            contents = contents.replace(/compileSdkVersion\s+\d+/g, 'compileSdkVersion 34');
+            contents = contents.replace(/buildToolsVersion\s+".*"/g, 'buildToolsVersion "34.0.0"');
+            contents = contents.replace(/targetSdkVersion\s+\d+/g, 'targetSdkVersion 33');
+            
+            fs.writeFileSync(file, contents);
         }
-    }
-}
-`;
-    // On ajoute le bloc à la fin du fichier s'il n'existe pas déjà
-    if (!buildGradle.includes("react-native-keyevent")) {
-        config.modResults.contents = buildGradle + fix;
-    }
-    return config;
-  });
+      }
+      return config;
+    },
+  ]);
 }
 
 // --- PLUGIN 2 : Injection du code natif pour écouter les boutons (CRITIQUE) ---
