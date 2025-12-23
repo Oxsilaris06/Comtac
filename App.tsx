@@ -69,7 +69,7 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- RECONNEXION ---
+  // --- RECONNEXION AUTO ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -88,7 +88,7 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  // --- AUDIO SUBSCRIPTION ---
+  // --- AUDIO UI SYNC ---
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -96,47 +96,11 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
-  // --- INITIALIZERS ---
-  useEffect(() => {
-    AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
-      if (saved) setLoginInput(saved);
-    });
-  }, []);
-
-  useEffect(() => {
-    Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) })));
-    const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) })));
-    return () => sub && sub.remove();
-  }, []);
-
-  useEffect(() => {
-    Magnetometer.setUpdateInterval(100);
-    const subscription = Magnetometer.addListener((data) => {
-      let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); 
-      angle = angle - 90; 
-      if (angle < 0) angle = 360 + angle;
-      setUser(prev => {
-          if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) };
-          return prev;
-      });
-    });
-    return () => subscription && subscription.remove();
-  }, []);
-
-  useEffect(() => {
-    const backAction = () => {
-      if (selectedOperatorId) { setSelectedOperatorId(null); return true; }
-      if (showQRModal) { setShowQRModal(false); return true; }
-      if (showScanner) { setShowScanner(false); return true; }
-      if (view === 'ops' || view === 'map') {
-        Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]);
-        return true;
-      }
-      return false;
-    };
-    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
-    return () => backHandler.remove();
-  }, [view, user.role, selectedOperatorId, showQRModal, showScanner]);
+  // ... (Initializers: Async, Battery, Magneto, BackHandler) ...
+  useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
+  useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
+  useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
+  useEffect(() => { const backAction = () => { if (selectedOperatorId) { setSelectedOperatorId(null); return true; } if (showQRModal) { setShowQRModal(false); return true; } if (showScanner) { setShowScanner(false); return true; } if (view === 'ops' || view === 'map') { Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]); return true; } return false; }; const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction); return () => backHandler.remove(); }, [view, user.role, selectedOperatorId, showQRModal, showScanner]);
 
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
     setToast({ msg, type });
@@ -163,9 +127,7 @@ const App: React.FC = () => {
   const mergePeer = useCallback((newPeer: UserData) => {
     setPeers(prev => {
         const next = { ...prev };
-        const oldId = Object.keys(next).find(key => 
-            next[key].callsign === newPeer.callsign && key !== newPeer.id
-        );
+        const oldId = Object.keys(next).find(key => next[key].callsign === newPeer.callsign && key !== newPeer.id);
         if (oldId) delete next[oldId];
         next[newPeer.id] = newPeer;
         return next;
@@ -182,11 +144,7 @@ const App: React.FC = () => {
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
-        if (list.length > 0) {
-            list.forEach((u: UserData) => { 
-                if(u.id && u.id !== user.id) mergePeer(u); 
-            });
-        }
+        if (list.length > 0) { list.forEach((u: UserData) => { if(u.id && u.id !== user.id) mergePeer(u); }); }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
       case 'PING':
@@ -258,28 +216,6 @@ const App: React.FC = () => {
       setSelectedOperatorId(null);
   };
 
-  const handleHostDisconnect = () => {
-      if (user.role === OperatorRole.HOST) return;
-      showToast("CONNEXION PERDUE - MIGRATION...", "error");
-      const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
-      candidates.push(user);
-      candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-      const newHost = candidates[0];
-      if (newHost && newHost.id === user.id) {
-          promoteToHost();
-      } else if (newHost) {
-          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
-      }
-  };
-
-  const promoteToHost = () => {
-      setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
-      setHostId(user.id);
-      audioService.updateNotification(user.id);
-      showToast("JE SUIS LE NOUVEL HÔTE", "info");
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
-
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
     const myId = initialRole === OperatorRole.HOST ? generateShortId() : undefined;
@@ -343,6 +279,28 @@ const App: React.FC = () => {
     conn.on('close', () => { if (view === 'ops' || view === 'map') handleHostDisconnect(); });
     conn.on('error', () => handleHostDisconnect());
   }, [user, handleData, showToast, hostId, view]);
+  
+  const handleHostDisconnect = () => {
+      if (user.role === OperatorRole.HOST) return;
+      showToast("CONNEXION PERDUE - MIGRATION...", "error");
+      const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
+      candidates.push(user);
+      candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+      const newHost = candidates[0];
+      if (newHost && newHost.id === user.id) {
+          promoteToHost();
+      } else if (newHost) {
+          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
+      }
+  };
+
+  const promoteToHost = () => {
+      setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
+      setHostId(user.id);
+      audioService.updateNotification(user.id);
+      showToast("JE SUIS LE NOUVEL HÔTE", "info");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
 
   const startServices = async () => {
     if (!hasConsent) return;
@@ -614,7 +572,7 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      {/* --- MODALE ACTION OPÉRATEUR CORRIGÉE --- */}
+      {/* MODALE D'ACTION CORRIGÉE */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
@@ -623,32 +581,38 @@ const App: React.FC = () => {
       >
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedOperatorId(null)}>
            <View style={[styles.modalContent, { backgroundColor: '#18181b', borderColor: '#333', borderWidth: 1 }]}>
-               <Text style={[styles.modalTitle, {color: 'white'}]}>ACTION OPÉRATEUR</Text>
-               <Text style={{color: '#a1a1aa', marginBottom: 20}}>{peers[selectedOperatorId || '']?.callsign || 'Inconnu'}</Text>
+               
+               <View style={{alignItems: 'center', marginBottom: 20}}>
+                   <Text style={[styles.modalTitle, {color: 'white', marginBottom: 5}]}>ACTION OPÉRATEUR</Text>
+                   <Text style={{color: '#a1a1aa', fontSize: 16, fontWeight: 'bold'}}>
+                       {peers[selectedOperatorId || '']?.callsign || 'Inconnu'}
+                   </Text>
+               </View>
                
                <TouchableOpacity 
                    onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} 
-                   style={[styles.modalBtn, {backgroundColor: '#c026d3', marginBottom: 10, width: '100%'}]}
+                   style={[styles.modalBtn, {backgroundColor: '#c026d3', marginBottom: 12, width: '100%'}]}
                >
-                   <Text style={{color: 'white', fontWeight: 'bold'}}>APPEL PRIVÉ</Text>
+                   <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>APPEL PRIVÉ</Text>
                </TouchableOpacity>
                
                {user.role === OperatorRole.HOST && (
                    <TouchableOpacity 
                        onPress={() => selectedOperatorId && handleKickUser(selectedOperatorId)} 
-                       style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 10, width: '100%'}]}
+                       style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 12, width: '100%'}]}
                    >
-                        <Text style={{color: 'white', fontWeight: 'bold'}}>BANNIR / KICK</Text>
+                        <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>BANNIR / KICK</Text>
                    </TouchableOpacity>
                )}
                
-               <TouchableOpacity onPress={() => setSelectedOperatorId(null)} style={{padding: 10}}>
+               <TouchableOpacity onPress={() => setSelectedOperatorId(null)} style={{padding: 10, marginTop: 5}}>
                    <Text style={{color: '#71717a'}}>ANNULER</Text>
                </TouchableOpacity>
            </View>
         </TouchableOpacity>
       </Modal>
       
+      {/* ... (Autres Modales QR/Scanner inchangées) */}
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
