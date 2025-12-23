@@ -23,30 +23,42 @@ class AudioService {
 
   async init(): Promise<boolean> {
     try {
-      // 1. Audio / Micro (MICRO OFF PAR DEFAUT)
+      // 1. Démarrage Micro (STRICTEMENT OFF AU DÉPART)
       const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
       this.stream = stream;
       this.setTx(false);
 
-      // 2. Liaison HeadsetService (C'est lui qui déclenche tout)
+      // 2. Liaison HeadsetService (Commandes & Routage)
       headsetService.setCommandCallback((source) => {
-          this.toggleVox(); // Action unique
+          this.toggleVox(); 
       });
       
       headsetService.setConnectionCallback((isConnected, type) => {
-          if(isConnected) this.updateNotification(this.currentRoomId, `Audio: ${type}`);
+          console.log(`[Audio] Routing Update: ${type}`);
+          if(isConnected) {
+              // Casque connecté : On désactive le haut-parleur forcé
+              InCallManager.setForceSpeakerphoneOn(false);
+              this.updateNotification(this.currentRoomId, `Casque Actif (${type})`);
+          } else {
+              // Pas de casque : On force le haut-parleur (Talkie)
+              InCallManager.setForceSpeakerphoneOn(true);
+              this.updateNotification(this.currentRoomId, `Haut-Parleur Actif`);
+          }
+          // On s'assure que le focus média est conservé après un changement de route
+          this.refreshMediaFocus();
       });
 
-      // 3. Configuration Audio (Boost & Priorité)
+      // 3. Configuration Audio Initiale
       try {
-          InCallManager.start({ media: 'audio' }); 
+          // Mode 'audio' standard (meilleure compatibilité Bluetooth)
+          InCallManager.start({ media: 'audio' });
+          // Par défaut on suppose pas de casque -> Speaker
           InCallManager.setForceSpeakerphoneOn(true);
-          InCallManager.setSpeakerphoneOn(true);
-          InCallManager.setKeepScreenOn(true); 
+          InCallManager.setKeepScreenOn(true);
           await VolumeManager.setVolume(1.0); 
       } catch (e) { console.log("Audio Config Error:", e); }
 
-      // 4. Setup MusicControl (PRIORITÉ BLUETOOTH)
+      // 4. Setup MusicControl (Pour Bluetooth & Notif)
       this.setupMusicControl();
 
       // 5. Vox & KeepAlive
@@ -60,19 +72,17 @@ class AudioService {
     }
   }
 
-  // --- UI SUBSCRIPTION ---
+  // --- UI ---
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
       this.listeners.push(callback);
-      return () => {
-          this.listeners = this.listeners.filter(l => l !== callback);
-      };
+      return () => { this.listeners = this.listeners.filter(l => l !== callback); };
   }
 
   private notifyListeners() {
       this.listeners.forEach(cb => cb(this.mode));
   }
 
-  // --- GESTION MUSIQUE / BLUETOOTH ---
+  // --- MUSIC CONTROL (BACKUP BLUETOOTH) ---
   private setupMusicControl() {
       try {
           if (Platform.OS === 'android') {
@@ -90,7 +100,7 @@ class AudioService {
              MusicControl.enableControl('closeNotification', false, { when: 'never' });
              MusicControl.handleAudioInterruptions(true);
 
-             // IMPORTANT : On redirige tout vers headsetService pour déduplication
+             // Redirection vers HeadsetService pour déduplication
              commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => {
                  headsetService.triggerCommand('BLUETOOTH_' + cmd);
              }));
@@ -100,17 +110,25 @@ class AudioService {
       } catch (e) { }
   }
 
-  private setupVox() {
-      try {
-          RNSoundLevel.start();
-          RNSoundLevel.onNewFrame = (data: any) => {
-              if (this.mode === 'vox' && data.value > this.voxThreshold) {
-                  if (!this.isTx) this.setTx(true);
-                  if (this.voxTimer) clearTimeout(this.voxTimer);
-                  this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
-              }
-          };
-      } catch (e) { }
+  private refreshMediaFocus() {
+      if (Platform.OS === 'android') {
+          MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING, elapsedTime: 0 });
+      }
+  }
+
+  // --- LOGIQUE METIER ---
+  toggleVox() {
+    this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
+    
+    // Si passage en PTT, coupure immédiate
+    if (this.mode === 'ptt') {
+        this.setTx(false);
+        if (this.voxTimer) clearTimeout(this.voxTimer);
+    }
+
+    this.updateNotification();
+    this.notifyListeners();
+    return this.mode === 'vox';
   }
 
   updateNotification(roomId?: string, extraInfo?: string) {
@@ -131,34 +149,25 @@ class AudioService {
           isSeekable: false,
           notificationIcon: 'icon' 
       });
-      
-      MusicControl.updatePlayback({
-          state: MusicControl.STATE_PLAYING,
-          elapsedTime: 0 
-      });
+      this.refreshMediaFocus();
+  }
+
+  private setupVox() {
+      try {
+          RNSoundLevel.start();
+          RNSoundLevel.onNewFrame = (data: any) => {
+              if (this.mode === 'vox' && data.value > this.voxThreshold) {
+                  if (!this.isTx) this.setTx(true);
+                  if (this.voxTimer) clearTimeout(this.voxTimer);
+                  this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
+              }
+          };
+      } catch (e) { }
   }
 
   private startKeepAlive() {
       if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
-      this.keepAliveTimer = setInterval(() => {
-          MusicControl.updatePlayback({
-              state: MusicControl.STATE_PLAYING,
-              elapsedTime: Date.now() 
-          });
-      }, 5000);
-  }
-
-  toggleVox() {
-    this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
-    
-    if (this.mode === 'ptt') {
-        this.setTx(false);
-        if (this.voxTimer) clearTimeout(this.voxTimer);
-    }
-
-    this.updateNotification();
-    this.notifyListeners();
-    return this.mode === 'vox';
+      this.keepAliveTimer = setInterval(() => { this.refreshMediaFocus(); }, 5000);
   }
 
   setTx(state: boolean) {
