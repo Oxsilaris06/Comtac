@@ -1,13 +1,11 @@
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
-import { VolumeManager } from 'react-native-volume-manager';
+import { NativeEventEmitter, NativeModules } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
-import InCallManager from 'react-native-incall-manager';
 
-// Liste des KeyCodes (Boutons Physiques) supportés
+// Définition des touches physiques
 const KEY_CODES = {
     VOLUME_UP: 24,
     VOLUME_DOWN: 25,
-    HEADSET_HOOK: 79,
+    HEADSET_HOOK: 79,     
     MEDIA_PLAY_PAUSE: 85,
     MEDIA_NEXT: 87,
     MEDIA_PREVIOUS: 88,
@@ -20,120 +18,68 @@ type CommandCallback = (source: string) => void;
 type ConnectionCallback = (isConnected: boolean, type: string) => void;
 
 class HeadsetService {
-    private lastVolume: number = -1; // -1 = Pas encore initialisé
     private lastVolumeUpTime: number = 0;
     private onCommand?: CommandCallback;
     private onConnectionChange?: ConnectionCallback;
     
-    // État
     public isHeadsetConnected: boolean = false;
 
     constructor() {
         this.init();
     }
 
-    private async init() {
-        // 1. Initialisation Volume (Fix Bug Volume Down)
-        try {
-            const vol = await VolumeManager.getVolume();
-            this.lastVolume = typeof vol === 'number' ? vol : 0.5;
-        } catch (e) {
-            this.lastVolume = 0.5;
-        }
-
-        // 2. Setup Listeners
-        this.setupVolumeListener();
+    private init() {
         this.setupKeyEventListener();
         this.setupConnectionListener();
     }
 
-    /**
-     * Définit le callback à appeler lorsqu'une interaction valide est détectée
-     */
     public setCommandCallback(callback: CommandCallback) {
         this.onCommand = callback;
     }
 
-    /**
-     * Définit le callback pour les changements de connexion (Casque branché/débranché)
-     */
     public setConnectionCallback(callback: ConnectionCallback) {
         this.onConnectionChange = callback;
     }
 
-    // --- GESTION CONNEXION CASQUE ---
+    // --- 1. DÉTECTION CONNEXION CASQUE ---
     private setupConnectionListener() {
-        // InCallManager émet des événements quand la sortie audio change
-        // On surveille "WiredHeadset" et "Bluetooth"
         const eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
-        
         eventEmitter.addListener('onAudioDeviceChanged', (data) => {
-            const device = data.availableAudioDeviceList ? JSON.parse(data.availableAudioDeviceList) : [];
             const current = data.selectedAudioDevice;
-            
-            const isBluetooth = current === 'Bluetooth';
-            const isWired = current === 'WiredHeadset';
-            const connected = isBluetooth || isWired;
+            const connected = current === 'Bluetooth' || current === 'WiredHeadset';
 
             if (this.isHeadsetConnected !== connected) {
                 this.isHeadsetConnected = connected;
                 if (this.onConnectionChange) {
                     this.onConnectionChange(connected, current);
                 }
-                console.log(`[Headset] Status changed: ${connected ? 'CONNECTED' : 'DISCONNECTED'} (${current})`);
             }
         });
     }
 
-    // --- GESTION VOLUME (DOUBLE CLIC UP UNIQUEMENT) ---
-    private setupVolumeListener() {
-        VolumeManager.addVolumeListener((result) => {
-            const currentVol = result.volume;
-            const now = Date.now();
-
-            // Sécurité init
-            if (this.lastVolume === -1) {
-                this.lastVolume = currentVol;
-                return;
-            }
-
-            // DÉTECTION STRICTE : Seulement si le volume AUGMENTE
-            // (current > last) OU (current == 1 et last == 1 pour les clics répétés au max)
-            const isVolumeUp = currentVol > this.lastVolume || (currentVol === 1 && this.lastVolume === 1);
-            
-            // Si c'est Volume Down, on ignore l'action (mais on met à jour lastVolume)
-            if (!isVolumeUp) {
-                this.lastVolume = currentVol;
-                return; 
-            }
-
-            // Logique Double Clic (<600ms)
-            if (now - this.lastVolumeUpTime < 600) {
-                this.triggerCommand('DOUBLE_VOL_UP');
-                this.lastVolumeUpTime = 0; 
-                
-                // Feedback Tactique : On remet le volume à fond
-                setTimeout(() => VolumeManager.setVolume(1.0), 100);
-            } else {
-                this.lastVolumeUpTime = now;
-            }
-            
-            this.lastVolume = currentVol;
-        });
-    }
-
-    // --- GESTION BOUTONS PHYSIQUES (KEY EVENT) ---
+    // --- 2. GESTION TOUCHES PHYSIQUES (KeyEvent) ---
     private setupKeyEventListener() {
         KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-            // On ignore Volume Down ici aussi (KeyCode 25)
-            if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
+            
+            // CAS 1 : VOLUME DOWN -> ON BLOQUE ABSOLUMENT
+            if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) {
+                return; // On ne fait RIEN.
+            }
 
-            // Si c'est Volume Up (24), on laisse le VolumeManager gérer le double clic
-            // (Car KeyEvent ne détecte pas toujours les changements de volume si l'écran est éteint sur certains tels)
-            if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) return;
+            // CAS 2 : VOLUME UP -> GESTION DOUBLE CLIC
+            if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
+                const now = Date.now();
+                // Si le délai entre deux appuis est < 500ms
+                if (now - this.lastVolumeUpTime < 500) {
+                    this.triggerCommand('DOUBLE_VOL_UP');
+                    this.lastVolumeUpTime = 0; // Reset pour éviter triple clic
+                } else {
+                    this.lastVolumeUpTime = now;
+                }
+                return; // On ne déclenche pas d'autre action
+            }
 
-            // Pour tous les autres boutons (Play, Pause, HeadsetHook...)
-            // On déclenche directement l'action
+            // CAS 3 : BOUTONS MEDIA / CASQUE -> DÉCLENCHEMENT DIRECT
             const validKeys = Object.values(KEY_CODES);
             if (validKeys.includes(keyEvent.keyCode)) {
                 this.triggerCommand(`KEY_${keyEvent.keyCode}`);
@@ -143,6 +89,7 @@ class HeadsetService {
 
     private triggerCommand(source: string) {
         if (this.onCommand) {
+            console.log(`[HeadsetService] Commande reçue: ${source}`);
             this.onCommand(source);
         }
     }
