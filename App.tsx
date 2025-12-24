@@ -69,7 +69,7 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // RECONNEXION
+  // --- RECONNEXION ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -88,7 +88,7 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  // AUDIO SYNC
+  // --- AUDIO UI SYNC ---
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -96,11 +96,47 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
-  // Initializers...
-  useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
-  useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
-  useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
-  useEffect(() => { const backAction = () => { if (selectedOperatorId) { setSelectedOperatorId(null); return true; } if (showQRModal) { setShowQRModal(false); return true; } if (showScanner) { setShowScanner(false); return true; } if (view === 'ops' || view === 'map') { Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]); return true; } return false; }; const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction); return () => backHandler.remove(); }, [view, user.role, selectedOperatorId, showQRModal, showScanner]);
+  // --- INITIALIZERS ---
+  useEffect(() => {
+    AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => {
+      if (saved) setLoginInput(saved);
+    });
+  }, []);
+
+  useEffect(() => {
+    Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) })));
+    const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) })));
+    return () => sub && sub.remove();
+  }, []);
+
+  useEffect(() => {
+    Magnetometer.setUpdateInterval(100);
+    const subscription = Magnetometer.addListener((data) => {
+      let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); 
+      angle = angle - 90; 
+      if (angle < 0) angle = 360 + angle;
+      setUser(prev => {
+          if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) };
+          return prev;
+      });
+    });
+    return () => subscription && subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    const backAction = () => {
+      if (selectedOperatorId) { setSelectedOperatorId(null); return true; }
+      if (showQRModal) { setShowQRModal(false); return true; }
+      if (showScanner) { setShowScanner(false); return true; }
+      if (view === 'ops' || view === 'map') {
+        Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]);
+        return true;
+      }
+      return false;
+    };
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
+    return () => backHandler.remove();
+  }, [view, user.role, selectedOperatorId, showQRModal, showScanner]);
 
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
     setToast({ msg, type });
@@ -216,6 +252,28 @@ const App: React.FC = () => {
       setSelectedOperatorId(null);
   };
 
+  const handleHostDisconnect = () => {
+      if (user.role === OperatorRole.HOST) return;
+      showToast("CONNEXION PERDUE - MIGRATION...", "error");
+      const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
+      candidates.push(user);
+      candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+      const newHost = candidates[0];
+      if (newHost && newHost.id === user.id) {
+          promoteToHost();
+      } else if (newHost) {
+          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
+      }
+  };
+
+  const promoteToHost = () => {
+      setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
+      setHostId(user.id);
+      audioService.updateNotification(user.id);
+      showToast("JE SUIS LE NOUVEL HÔTE", "info");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
   const initPeer = useCallback((initialRole: OperatorRole, targetHostId?: string) => {
     if (peerRef.current) peerRef.current.destroy();
     const myId = initialRole === OperatorRole.HOST ? generateShortId() : undefined;
@@ -276,17 +334,8 @@ const App: React.FC = () => {
     });
     
     conn.on('data', (data: any) => handleData(data, targetId));
-    conn.on('close', () => { 
-        if (view === 'ops' || view === 'map') {
-            if (user.role === OperatorRole.HOST) return;
-            showToast("CONNEXION PERDUE", "error");
-            // Reconnexion simple
-            setTimeout(() => { connectToHost(targetId); }, 2000);
-        } else {
-            showToast("Déconnecté", "error"); 
-        }
-    });
-    conn.on('error', () => { showToast("Erreur connexion", "error"); });
+    conn.on('close', () => { if (view === 'ops' || view === 'map') handleHostDisconnect(); else showToast("Déconnecté", "error"); });
+    conn.on('error', () => handleHostDisconnect());
   }, [user, handleData, showToast, hostId, view]);
 
   const startServices = async () => {
@@ -422,6 +471,12 @@ const App: React.FC = () => {
                 <MaterialIcons name="satellite" size={20} color="#3b82f6" />
                 <Text style={styles.headerTitle}> COM<Text style={{color: '#3b82f6'}}>TAC</Text></Text>
               </View>
+
+              {/* BOUTON SWITCH AUDIO */}
+              <TouchableOpacity onPress={() => audioService.cycleAudioOutput()} style={[styles.navBtn, {marginRight: 8}]}>
+                  <MaterialIcons name="volume-up" size={16} color="#a1a1aa" />
+              </TouchableOpacity>
+
               <TouchableOpacity onPress={() => setView(view === 'map' ? 'ops' : 'map')} style={[styles.navBtn, view === 'map' ? styles.navBtnActive : null]}>
                 <MaterialIcons name="map" size={16} color={view === 'map' ? 'white' : '#a1a1aa'} />
                 <Text style={[styles.navBtnText, view === 'map' ? {color:'white'} : null]}>MAP</Text>
@@ -559,7 +614,6 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      {/* --- MODALE ACTION OPÉRATEUR CORRIGÉE --- */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
@@ -578,7 +632,7 @@ const App: React.FC = () => {
                
                <TouchableOpacity 
                    onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} 
-                   style={[styles.modalBtn, {backgroundColor: '#c026d3', marginBottom: 12, width: '100%'}]}
+                   style={[styles.modalBtn, {backgroundColor: '#d946ef', marginBottom: 12, width: '100%'}]}
                >
                    <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>APPEL PRIVÉ</Text>
                </TouchableOpacity>
@@ -599,7 +653,6 @@ const App: React.FC = () => {
         </TouchableOpacity>
       </Modal>
       
-      {/* ... (Autres Modales) */}
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
