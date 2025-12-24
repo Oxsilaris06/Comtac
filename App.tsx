@@ -1,3 +1,4 @@
+import './polyfills'; // Toujours en premier
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
@@ -16,6 +17,7 @@ import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Magnetometer } from 'expo-sensors';
 import NetInfo from '@react-native-community/netinfo';
+import { Audio } from 'expo-av'; // IMPORT CRITIQUE POUR PERMISSION MICRO
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
@@ -69,6 +71,7 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  // --- GESTION RESEAU ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -94,9 +97,12 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
+  // --- INITIALISATION CAPTEURS UI ---
   useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
   useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
   useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
+  
+  // --- BACK HANDLER ---
   useEffect(() => { const backAction = () => { if (selectedOperatorId) { setSelectedOperatorId(null); return true; } if (showQRModal) { setShowQRModal(false); return true; } if (showScanner) { setShowScanner(false); return true; } if (view === 'ops' || view === 'map') { Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]); return true; } return false; }; const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction); return () => backHandler.remove(); }, [view, user.role, selectedOperatorId, showQRModal, showScanner]);
 
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
@@ -273,8 +279,7 @@ const App: React.FC = () => {
     });
     
     conn.on('data', (data: any) => handleData(data, targetId));
-    conn.on('close', () => { if (view === 'ops' || view === 'map') handleHostDisconnect(); // Migration Host
-                                else showToast("Déconnecté", "error"); });
+    conn.on('close', () => { if (view === 'ops' || view === 'map') handleHostDisconnect(); else showToast("Déconnecté", "error"); });
     conn.on('error', () => handleHostDisconnect());
   }, [user, handleData, showToast, hostId, view]);
 
@@ -300,52 +305,83 @@ const App: React.FC = () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
+  // --- FONCTION CORRIGÉE : Séquençage strict des permissions ---
   const startServices = async () => {
     if (!hasConsent) return;
+    
+    console.log("[App] Requesting Permissions Sequence...");
 
-    await audioService.init();
-    if (!permission?.granted) await requestPermission();
+    try {
+        // 1. D'abord l'AUDIO (Critique pour ne pas freeze WebRTC)
+        const audioStatus = await Audio.requestPermissionsAsync();
+        if (!audioStatus.granted) {
+            Alert.alert("Erreur", "L'accès au micro est requis pour la radio.");
+            return;
+        }
 
-    audioService.startMetering((state) => {
-      const isTransmitting = state === 1;
-      if (isTransmitting !== user.isTx) {
-         if (silenceMode && user.role !== OperatorRole.HOST) return;
-         setUser(prev => {
-            const u = { ...prev, isTx: isTransmitting };
-            broadcast({ type: 'UPDATE', user: u });
-            return u;
-         });
-      }
-    });
+        // 2. Ensuite la LOCALISATION (Lourd, peut prendre du temps)
+        const locationStatus = await Location.requestForegroundPermissionsAsync();
+        if (locationStatus.status !== 'granted') {
+             showToast("GPS Refusé - Mode carte désactivé", "error");
+        }
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') showToast("GPS Refusé", "error");
+        // 3. Enfin la CAMERA (Optionnel)
+        if (!permission?.granted) {
+            await requestPermission();
+        }
 
-    Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
-      (loc) => {
-        const { latitude, longitude, speed, heading, accuracy } = loc.coords;
-        if (accuracy && accuracy > 30) return;
+        // 4. UNIQUEMENT MAINTENANT : On lance le moteur Audio/WebRTC
+        // On évite le freeze car les permissions sont déjà acquises
+        console.log("[App] Permissions OK -> Starting Audio Service");
+        await audioService.init();
 
-        setUser(prev => {
-          const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
-          const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
-          
-          if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
-            broadcast({ type: 'UPDATE', user: newUser });
-            lastLocationRef.current = { lat: latitude, lng: longitude };
+        // 5. Setup Metering
+        audioService.startMetering((state) => {
+          const isTransmitting = state === 1;
+          if (isTransmitting !== user.isTx) {
+             if (silenceMode && user.role !== OperatorRole.HOST) return;
+             setUser(prev => {
+                const u = { ...prev, isTx: isTransmitting };
+                broadcast({ type: 'UPDATE', user: u });
+                return u;
+             });
           }
-          return newUser;
         });
-      }
-    );
+
+        // 6. Setup GPS Tracking
+        if (locationStatus.status === 'granted') {
+            Location.watchPositionAsync(
+              { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
+              (loc) => {
+                const { latitude, longitude, speed, heading, accuracy } = loc.coords;
+                if (accuracy && accuracy > 50) return;
+
+                setUser(prev => {
+                  const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
+                  const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
+                  
+                  if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
+                    broadcast({ type: 'UPDATE', user: newUser });
+                    lastLocationRef.current = { lat: latitude, lng: longitude };
+                  }
+                  return newUser;
+                });
+              }
+            );
+        }
+
+    } catch (e) {
+        console.error("[App] Start Services Error", e);
+        showToast("Erreur démarrage services", "error");
+    }
   };
 
   useEffect(() => {
-      if (hasConsent && user.callsign) {
+      // On attend le consentement et un trigramme valide avant de lancer la séquence
+      if (hasConsent && user.callsign && view !== 'login') {
           startServices();
       }
-  }, [hasConsent]);
+  }, [hasConsent, view]); // Trigger sur changement de vue (Login -> Menu)
 
   const handleLogin = async () => {
     const tri = loginInput.toUpperCase();
@@ -353,7 +389,8 @@ const App: React.FC = () => {
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
     
     setUser(prev => ({ ...prev, callsign: tri }));
-    if (hasConsent) await startServices();
+    // Note: startServices sera appelé par le useEffect [hasConsent, view]
+    // C'est plus propre que de l'appeler ici directement
     setView('menu');
   };
 
@@ -562,15 +599,14 @@ const App: React.FC = () => {
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
       
-      {PrivacyConsentModal ? (
-        <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
-      ) : null}
+      {/* Composant Modal Consentement */}
+      <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
 
       {view === 'login' ? renderLogin() :
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      {/* --- MODALE ACTION CORRIGÉE (Fuchsia) --- */}
+      {/* MODALES */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
@@ -610,7 +646,6 @@ const App: React.FC = () => {
         </TouchableOpacity>
       </Modal>
       
-      {/* ... (Autres Modales) */}
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
