@@ -16,33 +16,42 @@ class AudioService {
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
   keepAliveTimer: any = null;
+  
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
+  private isInitialized = false;
 
   async init(): Promise<boolean> {
+    if (this.isInitialized) return true; // Évite les double-init
+
     try {
       console.log("[Audio] Initializing...");
 
-      // 1. SETUP HEADSET AVANT TOUT
+      // 1. HEADSET LISTENER
       headsetService.setCommandCallback((source) => { this.toggleVox(); });
       headsetService.setConnectionCallback((isConnected, type) => { this.handleRouteUpdate(isConnected, type); });
       headsetService.init();
 
       // 2. CONFIG SYSTEME
-      InCallManager.start({ media: 'audio' }); 
-      InCallManager.setKeepScreenOn(true);
-      
-      // Init pessimiste (Speaker par défaut)
-      if (!headsetService.isHeadsetConnected) {
-          InCallManager.setForceSpeakerphoneOn(true);
+      // On wrap InCallManager dans un try/catch car il peut crash sur certains Androids
+      try {
+          InCallManager.start({ media: 'audio' }); 
+          InCallManager.setKeepScreenOn(true);
+          
+          if (!headsetService.isHeadsetConnected) {
+              InCallManager.setForceSpeakerphoneOn(true);
+          }
+      } catch (e) {
+          console.warn("[Audio] InCallManager start warning:", e);
       }
 
-      // 3. MICRO (MUTE AU DÉPART)
+      // 3. MICRO
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
         this.setTx(false); 
       } catch (e) {
-        console.error("Micro Error", e);
+        console.error("Micro Error (getUserMedia)", e);
+        return false; // Échec critique si pas de micro
       }
 
       // 4. MODULES SECONDAIRES
@@ -50,9 +59,9 @@ class AudioService {
       this.setupVox();
       this.startKeepAlive();
 
-      // Volume confort (0.8 au lieu de 1.0)
       try { await VolumeManager.setVolume(0.8); } catch (e) {}
 
+      this.isInitialized = true;
       return true;
     } catch (err) {
       console.error("[Audio] Init Error:", err);
@@ -60,6 +69,7 @@ class AudioService {
     }
   }
 
+  // ... (Reste du code identique)
   private handleRouteUpdate(isConnected: boolean, type: string) {
       console.log(`[Audio] Route: Headset=${isConnected} (${type})`);
       if(isConnected) {
@@ -148,6 +158,20 @@ class AudioService {
     this.isTx = state;
     if (this.stream) this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     if(this.mode === 'vox') this.updateNotification();
+  }
+  
+  // Fonction pour mute le son entrant (quand on parle en PTT)
+  muteIncoming(mute: boolean) {
+      // TODO: Implémenter si on stocke les remoteStreams
+  }
+  
+  playStream(remoteStream: MediaStream) {
+       // TODO: Implémenter le stockage des streams
+  }
+
+  startMetering(callback: (level: number) => void) {
+      // Simulation simple pour l'UI, RNSoundLevel fait le vrai travail pour le VOX
+      setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
 }
 
