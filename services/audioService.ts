@@ -8,72 +8,65 @@ import { headsetService } from './headsetService';
 
 class AudioService {
   stream: MediaStream | null = null;
-  remoteStreams: MediaStream[] = []; 
   isTx: boolean = false;
   mode: 'ptt' | 'vox' = 'ptt';
   
+  // VOX Settings
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
 
-  currentRoomId: string = 'Déconnecté';
   keepAliveTimer: any = null;
-  lastToggleTime: number = 0;
-
-  // Listeners pour l'UI
+  
+  // Listeners UI
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
 
   async init(): Promise<boolean> {
     try {
-      // 1. Démarrage Micro (STRICTEMENT OFF AU DÉPART)
-      const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
-      this.stream = stream;
-      this.setTx(false);
+      console.log("[Audio] Initializing...");
 
-      // 2. Liaison HeadsetService (Commandes & Routage)
+      // 1. SETUP DES LISTENERS HEADSET AVANT DE DÉMARRER L'AUDIO
+      // C'est crucial pour capter le premier événement de routage
+      
+      // A. Gestion des commandes (Bouton -> Toggle VOX)
       headsetService.setCommandCallback((source) => {
+          console.log(`[Audio] Action received from ${source}`);
           this.toggleVox(); 
       });
       
-      // LOGIQUE CONDITIONNELLE AUDIO ICI
+      // B. Gestion du Routage (Casque <-> Speaker)
       headsetService.setConnectionCallback((isConnected, type) => {
-          console.log(`[Audio] Routing Update: ${type}`);
-          
-          if(isConnected) {
-              // CASQUE PRÉSENT (Bluetooth ou Filaire)
-              // On désactive le forçage haut-parleur pour laisser le son aller au casque
-              InCallManager.setForceSpeakerphoneOn(false); 
-              this.updateNotification(this.currentRoomId, `Casque Actif (${type})`);
-          } else {
-              // PAS DE CASQUE
-              // On force le haut-parleur pour un usage Talkie-Walkie (Mains libres)
-              InCallManager.setForceSpeakerphoneOn(true); 
-              this.updateNotification(this.currentRoomId, `Haut-Parleur Actif`);
-          }
-          
-          // On s'assure que le focus média est conservé après un changement de route
-          this.refreshMediaFocus();
+          this.handleRouteUpdate(isConnected, type);
       });
 
-      // 3. Configuration Audio Initiale
-      try {
-          // Mode 'audio' standard (meilleure compatibilité Bluetooth)
-          InCallManager.start({ media: 'audio' }); 
-          
-          // Au démarrage, on force le HP par sécurité, 
-          // le callback setConnectionCallback corrigera immédiatement si un casque est déjà là.
-          InCallManager.setForceSpeakerphoneOn(true); 
-          
-          InCallManager.setKeepScreenOn(true); 
-          await VolumeManager.setVolume(1.0); 
-      } catch (e) { console.log("Audio Config Error:", e); }
+      // On lance maintenant l'écoute des événements dans HeadsetService
+      headsetService.init();
 
-      // 4. Setup MusicControl (PRIORITÉ BLUETOOTH)
+      // 2. CONFIGURATION AUDIO SYSTEME
+      // start() prépare l'OS à gérer du son "Voice Call" (HFP Bluetooth)
+      InCallManager.start({ media: 'audio' }); 
+      InCallManager.setKeepScreenOn(true);
+      
+      // Configuration initiale "Pessimiste" (Haut parleur par défaut)
+      // Le callback setConnectionCallback corrigera ça quelques ms plus tard si un casque est là
+      if (!headsetService.isHeadsetConnected) {
+          InCallManager.setForceSpeakerphoneOn(true);
+      }
+
+      // 3. ACQUISITION MICRO
+      const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
+      this.stream = stream;
+      this.setTx(false); // Mute initial
+
+      // 4. SETUP MUSIC CONTROL (Background & Bluetooth Keys)
       this.setupMusicControl();
 
-      // 5. Vox & KeepAlive
+      // 5. SETUP VOX & KEEPALIVE
       this.setupVox();
-      this.startKeepAlive();
+      this.startKeepAlive(); // Empêche l'app de mourir en background
+
+      // Réglage volume max pour être sûr d'entendre
+      await VolumeManager.setVolume(1.0);
 
       return true;
     } catch (err) {
@@ -82,9 +75,30 @@ class AudioService {
     }
   }
 
+  // --- GESTION DU ROUTAGE AUDIO ---
+  private handleRouteUpdate(isConnected: boolean, type: string) {
+      console.log(`[Audio] Routing Update -> Headset: ${isConnected} (${type})`);
+      
+      if(isConnected) {
+          // CASQUE DÉTECTÉ (Bluetooth ou Filaire)
+          // IMPORTANT: Désactiver le haut-parleur forcé permet à l'OS de router vers le BT/Casque
+          InCallManager.setForceSpeakerphoneOn(false); 
+          this.updateNotification(`Casque (${type})`);
+      } else {
+          // PAS DE CASQUE
+          // On force le haut-parleur externe (Mode Talkie-Walkie Mains Libres)
+          InCallManager.setForceSpeakerphoneOn(true); 
+          this.updateNotification(`Haut-Parleur`);
+      }
+      
+      // Petit hack pour relancer le focus audio si le changement de route a coupé le son
+      setTimeout(() => this.refreshMediaFocus(), 500);
+  }
+
   // --- UI SUBSCRIPTION ---
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
       this.listeners.push(callback);
+      callback(this.mode); // Renvoi immédiat de l'état actuel
       return () => { this.listeners = this.listeners.filter(l => l !== callback); };
   }
 
@@ -92,45 +106,48 @@ class AudioService {
       this.listeners.forEach(cb => cb(this.mode));
   }
 
-  // --- GESTION MUSIQUE / BLUETOOTH ---
+  // --- BACKGROUND & BLUETOOTH BUTTONS ---
   private setupMusicControl() {
+      if (Platform.OS !== 'android') return;
+
       try {
-          if (Platform.OS === 'android') {
-             MusicControl.stopControl();
-             MusicControl.enableBackgroundMode(true);
-             
-             const commands = [
-                 'play', 'pause', 'stop', 'togglePlayPause', 
-                 'nextTrack', 'previousTrack', 
-                 'seekForward', 'seekBackward',
-                 'skipForward', 'skipBackward'
-             ];
-             commands.forEach(cmd => MusicControl.enableControl(cmd as any, true));
-             
-             MusicControl.enableControl('closeNotification', false, { when: 'never' });
-             MusicControl.handleAudioInterruptions(true);
+          MusicControl.stopControl();
+          // Active le mode background pour que les boutons BT fonctionnent écran éteint
+          MusicControl.enableBackgroundMode(true);
+          
+          // On active toutes les commandes possibles pour maximiser les chances d'interception
+          const commands = ['play', 'pause', 'stop', 'togglePlayPause', 'nextTrack', 'previousTrack'];
+          commands.forEach(cmd => MusicControl.enableControl(cmd as any, true));
+          
+          MusicControl.enableControl('closeNotification', false, { when: 'never' });
+          
+          // IMPORTANT: Redirection vers HeadsetService pour déduplication
+          // Si on reçoit "Play" du casque BT, on dit à HeadsetService "C'est une commande !"
+          commands.forEach(cmd => {
+            MusicControl.on(Command[cmd as keyof typeof Command], () => {
+                headsetService.triggerCommand('BLUETOOTH_AVRCP');
+            });
+          });
 
-             // Redirection vers HeadsetService pour déduplication
-             commands.forEach(cmd => MusicControl.on(Command[cmd as keyof typeof Command], () => {
-                 headsetService.triggerCommand('BLUETOOTH_' + cmd);
-             }));
-
-             this.updateNotification('Prêt');
-          }
-      } catch (e) { }
+          this.updateNotification('Prêt');
+      } catch (e) { console.log("MusicControl Error", e); }
   }
 
   private refreshMediaFocus() {
       if (Platform.OS === 'android') {
-          MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING, elapsedTime: 0 });
+          // Simule une lecture en cours pour garder le service vivant
+          MusicControl.updatePlayback({ 
+              state: MusicControl.STATE_PLAYING, 
+              elapsedTime: 0 
+          });
       }
   }
 
-  // --- LOGIQUE METIER ---
+  // --- LOGIQUE METIER (PTT/VOX) ---
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // Si passage en PTT, coupure immédiate
+    // Si on repasse en PTT, on coupe immédiatement le micro
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
@@ -138,69 +155,55 @@ class AudioService {
 
     this.updateNotification();
     this.notifyListeners();
-    return this.mode === 'vox';
   }
 
-  updateNotification(roomId?: string, extraInfo?: string) {
-      if (roomId) this.currentRoomId = roomId;
-      
+  updateNotification(extraInfo?: string) {
       const isVox = this.mode === 'vox';
-      const text = isVox ? 'VOX ACTIF' : 'PTT (Manuel)';
-      const color = isVox ? 0xFFef4444 : 0xFF3b82f6;
-      const subtitle = extraInfo || 'Mode Tactique';
-
+      const text = isVox ? 'VOX ON (Parlez)' : 'PTT (Appuyez)';
+      
+      // Mise à jour visuelle de la notif Android
       MusicControl.setNowPlaying({
-          title: `Salon #${this.currentRoomId}`,
-          artist: `ComTac : ${text}`,
-          album: subtitle, 
+          title: `Radio Tactique`,
+          artist: text,
+          album: extraInfo || (isVox ? 'Micro Ouvert' : 'En attente'), 
           duration: 0, 
-          color: color,
+          color: isVox ? 0xFFef4444 : 0xFF3b82f6, // Rouge si TX, Bleu si Veille
           isPlaying: true, 
-          isSeekable: false,
           notificationIcon: 'ic_launcher' 
       });
-      this.refreshMediaFocus();
   }
 
+  // --- LOGIQUE VOX (Détection Voix) ---
   private setupVox() {
-      try {
-          RNSoundLevel.start();
-          RNSoundLevel.onNewFrame = (data: any) => {
-              if (this.mode === 'vox' && data.value > this.voxThreshold) {
-                  if (!this.isTx) this.setTx(true);
-                  if (this.voxTimer) clearTimeout(this.voxTimer);
-                  this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
-              }
-          };
-      } catch (e) { }
+      RNSoundLevel.start();
+      RNSoundLevel.onNewFrame = (data: any) => {
+          if (this.mode === 'vox' && data.value > this.voxThreshold) {
+              if (!this.isTx) this.setTx(true);
+              
+              // Timer de maintien (Hystérésis)
+              if (this.voxTimer) clearTimeout(this.voxTimer);
+              this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
+          }
+      };
   }
 
   private startKeepAlive() {
       if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
-      this.keepAliveTimer = setInterval(() => { this.refreshMediaFocus(); }, 5000);
+      // Intervalle de 15s (5s est trop agressif et peut être tué par l'OS)
+      this.keepAliveTimer = setInterval(() => { this.refreshMediaFocus(); }, 15000);
   }
 
   setTx(state: boolean) {
     if (this.isTx === state) return;
     this.isTx = state;
+    
+    // Soft Mute WebRTC
     if (this.stream) {
       this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
-  }
-
-  muteIncoming(mute: boolean) {
-      this.remoteStreams.forEach(rs => {
-          rs.getAudioTracks().forEach(t => { t.enabled = !mute; });
-      });
-  }
-
-  playStream(remoteStream: MediaStream) { 
-      if (remoteStream.id === this.stream?.id) return;
-      this.remoteStreams.push(remoteStream);
-  }
-
-  startMetering(callback: (level: number) => void) {
-    setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
+    
+    // Feedback visuel dans la notif si changement d'état
+    if(this.mode === 'vox') this.updateNotification();
   }
 }
 
