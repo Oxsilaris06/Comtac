@@ -1,3 +1,4 @@
+
 import 'react-native-get-random-values';
 import { registerGlobals } from 'react-native-webrtc';
 
@@ -6,7 +7,7 @@ registerGlobals();
 
 // 2. Simulation Environnement Navigateur COMPLET pour Hermes
 
-// A. Self & Window (CRITIQUE : C'est le fix pour l'erreur "Property 'S'")
+// A. Self & Window (CRITIQUE : Le fix pour l'erreur "Property 'S'")
 if (typeof window === 'undefined') {
     global.window = global;
 }
@@ -14,7 +15,7 @@ if (typeof self === 'undefined') {
     global.self = global;
 }
 
-// B. Process (Manquant dans Hermes, utilisé par de nombreuses libs)
+// B. Process (Manquant dans Hermes)
 if (typeof process === 'undefined') {
     global.process = {
         env: { NODE_ENV: __DEV__ ? 'development' : 'production' },
@@ -23,7 +24,7 @@ if (typeof process === 'undefined') {
     };
 }
 
-// C. Location (Utilisé par PeerJS pour vérifier le contexte)
+// C. Location (Requis par PeerJS)
 if (!global.window.location) {
     global.window.location = {
         protocol: 'https:',
@@ -44,19 +45,17 @@ if (!global.navigator) {
 if (!global.navigator.userAgent) {
     global.navigator.userAgent = 'react-native';
 }
-// PeerJS check parfois onLine
 if (global.navigator.onLine === undefined) {
     global.navigator.onLine = true;
 }
 
-// E. Patch Timers Android
+// E. Timers
 const originalSetTimeout = setTimeout;
 global.setTimeout = (fn, ms, ...args) => {
     return originalSetTimeout(fn, ms || 0, ...args);
 };
 
-// F. Patch TextEncoder / TextDecoder (CRITIQUE pour le handshake PeerJS)
-// Hermes n'inclut pas TextEncoder par défaut. PeerJS en a besoin pour échanger les clés.
+// F. TextEncoder (CRITIQUE pour PeerJS + Hermes)
 if (typeof TextEncoder === 'undefined') {
     global.TextEncoder = class TextEncoder {
         encode(str) {
@@ -78,12 +77,11 @@ if (typeof TextDecoder === 'undefined') {
     };
 }
 
-// G. Crypto (CRITIQUE pour UUID et PeerJS)
-// Sécurité ultime : si le module natif échoue, on évite le crash au démarrage
+// G. Crypto Fallback (Sécurité ultime anti-crash)
 if (typeof crypto === 'undefined') {
     global.crypto = {
         getRandomValues: (arr) => {
-             console.warn("Using Crypto Fallback");
+             console.warn("Crypto Fallback Used");
              for (let i = 0; i < arr.length; i++) {
                  arr[i] = Math.floor(Math.random() * 256);
              }
