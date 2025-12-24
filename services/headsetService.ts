@@ -1,5 +1,6 @@
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
+// On garde l'import mais on retire l'usage dangereux de setVolume(1.0)
 import { VolumeManager } from 'react-native-volume-manager';
 
 const KEY_CODES = {
@@ -28,14 +29,25 @@ class HeadsetService {
     // State interne
     public isHeadsetConnected: boolean = false;
     private eventEmitter: NativeEventEmitter | null = null;
+    private subscription: EmitterSubscription | null = null;
 
     constructor() {
         // On n'appelle pas init() ici pour laisser le temps de binder les callbacks
     }
 
     public init() {
+        // Nettoyage préventif pour éviter les fuites de mémoire (doublons de listeners)
+        this.cleanup();
+        
         this.setupKeyEventListener();
         this.setupConnectionListener();
+    }
+
+    private cleanup() {
+        if (this.subscription) {
+            this.subscription.remove();
+            this.subscription = null;
+        }
     }
 
     public setCommandCallback(callback: CommandCallback) {
@@ -52,9 +64,8 @@ class HeadsetService {
         if (NativeModules.InCallManager) {
             this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
             
-            this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
-                // CORRECTION DU BUG "Unexpected character: o"
-                // data peut être soit une string JSON, soit déjà un objet JS.
+            this.subscription = this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
+                // CORRECTION ROBUSTESSE JSON
                 let deviceObj = data;
                 
                 if (typeof data === 'string') {
@@ -62,7 +73,6 @@ class HeadsetService {
                         deviceObj = JSON.parse(data);
                     } catch (e) {
                         console.warn("[Headset] Erreur parsing JSON device", e);
-                        // On continue avec l'objet tel quel ou on s'arrête
                         return;
                     }
                 }
@@ -72,9 +82,13 @@ class HeadsetService {
 
                 const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
                 
-                // Liste des devices considérés comme "Casque/Privé"
-                const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece'];
-                const connected = headsetTypes.includes(current) && current !== 'Speaker';
+                // CORRECTION : Liste étendue pour couvrir les casques USB et Voiture
+                const headsetTypes = [
+                    'Bluetooth', 'WiredHeadset', 'Earpiece', 'Headset', 
+                    'CarAudio', 'USB_HEADSET', 'USB_DEVICE', 'AuxLine'
+                ];
+                
+                const connected = headsetTypes.some(type => current.includes(type)) && current !== 'Speaker' && current !== 'Phone';
 
                 this.isHeadsetConnected = connected;
                 
@@ -90,18 +104,22 @@ class HeadsetService {
     // --- 2. INPUTS PHYSIQUES (Boutons Téléphone) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
+            // Note: KeyEvent est un module singleton, pas besoin de cleanup ici
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                // Ignorer Volume Down (Réservé système)
+                // Ignorer Volume Down (Réservé système pour baisser le son si besoin)
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
 
                 // Gestion Spéciale Volume UP (Double Clic Tactique)
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
                     const now = Date.now();
-                    if (now - this.lastVolumeUpTime < 500) {
+                    // CORRECTION : Fenêtre de temps réduite pour éviter les faux positifs
+                    if (now - this.lastVolumeUpTime < 400) {
                         this.triggerCommand('DOUBLE_VOL_UP');
                         this.lastVolumeUpTime = 0;
-                        // Reset volume visuel si besoin
-                        setTimeout(() => VolumeManager.setVolume(1.0), 100);
+                        
+                        // CORRECTION CRITIQUE : Suppression du setVolume(1.0)
+                        // Forcer le volume à 100% est dangereux pour l'audition et cause des glitchs UI.
+                        // On laisse le système gérer le volume ou on l'ignore silencieusement.
                     } else {
                         this.lastVolumeUpTime = now;
                     }
@@ -120,8 +138,9 @@ class HeadsetService {
     // --- 3. POINT D'ENTRÉE CENTRALISÉ (DEDUPLICATION) ---
     public triggerCommand(source: string) {
         const now = Date.now();
-        // Filtre Anti-Rebond (400ms)
-        if (now - this.lastCommandTime < 400) {
+        // CORRECTION : Réduction du Debounce à 250ms pour plus de réactivité
+        // 400ms était trop long pour des appuis rapides répétés (ex: SOS)
+        if (now - this.lastCommandTime < 250) {
             return;
         }
 
@@ -134,4 +153,4 @@ class HeadsetService {
     }
 }
 
-export const headsetService = new HeadsetService();S
+export const headsetService = new HeadsetService();
