@@ -1,7 +1,6 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 import { VolumeManager } from 'react-native-volume-manager';
-import InCallManager from 'react-native-incall-manager';
 
 const KEY_CODES = {
     VOLUME_UP: 24,
@@ -50,55 +49,66 @@ class HeadsetService {
     // --- 1. ROUTAGE & DÉTECTION ---
     private setupConnectionListener() {
         // InCallManager émet des événements via NativeEventEmitter
-        this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
-        
-        this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
-            const deviceObj = JSON.parse(data); // InCallManager renvoie parfois une string JSON
-            const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
+        if (NativeModules.InCallManager) {
+            this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
             
-            // Liste des devices considérés comme "Casque/Privé"
-            const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece'];
-            const connected = headsetTypes.includes(current) && current !== 'Speaker';
+            this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
+                // CORRECTION DU BUG "Unexpected character: o"
+                // data peut être soit une string JSON, soit déjà un objet JS.
+                let deviceObj = data;
+                
+                if (typeof data === 'string') {
+                    try {
+                        deviceObj = JSON.parse(data);
+                    } catch (e) {
+                        console.warn("[Headset] Erreur parsing JSON device", e);
+                        // On continue avec l'objet tel quel ou on s'arrête
+                        return;
+                    }
+                }
+                
+                // Sécurité supplémentaire
+                if (!deviceObj) return;
 
-            this.isHeadsetConnected = connected;
-            
-            console.log(`[Headset] Device Changed: ${current} (Headset: ${connected})`);
+                const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
+                
+                // Liste des devices considérés comme "Casque/Privé"
+                const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece'];
+                const connected = headsetTypes.includes(current) && current !== 'Speaker';
 
-            if (this.onConnectionChange) {
-                this.onConnectionChange(connected, current);
-            }
-        });
+                this.isHeadsetConnected = connected;
+                
+                console.log(`[Headset] Device Changed: ${current} (Headset: ${connected})`);
 
-        // Force une vérification initiale (utile si le listener démarre après l'event)
-        this.checkInitialConnection();
-    }
-
-    // Méthode pour vérifier manuellement l'état actuel (sans attendre un event)
-    public async checkInitialConnection() {
-        // Note: InCallManager n'a pas de méthode getAudioDevice synchrone fiable, 
-        // on se base sur le comportement par défaut de l'event listener qui trigger souvent au start.
-        // Mais on peut utiliser une astuce si besoin via VolumeManager pour détecter le type de sortie active.
+                if (this.onConnectionChange) {
+                    this.onConnectionChange(connected, current);
+                }
+            });
+        }
     }
 
     // --- 2. INPUTS PHYSIQUES (Boutons Téléphone) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                // Gestion Spéciale Volume UP (Double Clic = Commande, Simple Clic = Volume)
+                // Ignorer Volume Down (Réservé système)
+                if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
+
+                // Gestion Spéciale Volume UP (Double Clic Tactique)
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
                     const now = Date.now();
                     if (now - this.lastVolumeUpTime < 500) {
                         this.triggerCommand('DOUBLE_VOL_UP');
                         this.lastVolumeUpTime = 0;
-                        // Reset visuel du volume système
+                        // Reset volume visuel si besoin
                         setTimeout(() => VolumeManager.setVolume(1.0), 100);
                     } else {
                         this.lastVolumeUpTime = now;
                     }
-                    return; // On laisse le système gérer le volume up simple
+                    return;
                 }
 
-                // Boutons Médias
+                // Gestion Boutons Casque / Média
                 const validKeys = Object.values(KEY_CODES);
                 if (validKeys.includes(keyEvent.keyCode)) {
                     this.triggerCommand(`KEY_${keyEvent.keyCode}`);
@@ -108,13 +118,10 @@ class HeadsetService {
     }
 
     // --- 3. POINT D'ENTRÉE CENTRALISÉ (DEDUPLICATION) ---
-    // Cette méthode est appelée par KeyEvent (interne) ET par AudioService (MusicControl)
     public triggerCommand(source: string) {
         const now = Date.now();
-        // Filtre Anti-Rebond (Debounce 400ms)
-        // Empêche qu'un clic soit compté double (une fois par MusicControl, une fois par KeyEvent)
+        // Filtre Anti-Rebond (400ms)
         if (now - this.lastCommandTime < 400) {
-            console.log(`[Headset] Debounced: ${source}`);
             return;
         }
 
@@ -127,4 +134,4 @@ class HeadsetService {
     }
 }
 
-export const headsetService = new HeadsetService();
+export const headsetService = new HeadsetService();S
