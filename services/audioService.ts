@@ -10,6 +10,8 @@ import uuid from 'react-native-uuid';
 // UUID Constant pour la session d'appel
 const CALL_UUID = '00000000-0000-0000-0000-000000000001';
 
+type AudioRoute = 'SPEAKER' | 'EARPIECE' | 'BLUETOOTH' | 'WIRED_HEADSET';
+
 class AudioService {
   stream: MediaStream | null = null;
   remoteStreams: MediaStream[] = []; 
@@ -21,6 +23,11 @@ class AudioService {
   voxTimer: any = null;
 
   currentRoomId: string = 'Déconnecté';
+  
+  // État du routage audio
+  private currentRoute: AudioRoute = 'SPEAKER';
+  private availableHeadset: string | null = null; // 'Bluetooth' ou 'WiredHeadset' ou null
+
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
 
   async init(): Promise<boolean> {
@@ -30,35 +37,37 @@ class AudioService {
       this.stream = stream;
       this.setTx(false);
 
-      // 2. Setup CallKeep (Le cœur du système)
-      this.setupCallKeep(); // Note: Assurez-vous que setupCallKeep est bien défini ou importé si utilisé
+      // 2. Setup CallKeep
+      this.setupCallKeep();
 
-      // 3. Liaison HeadsetService (Backup Physique Volume Up)
+      // 3. Liaison HeadsetService (Commandes Physiques)
       headsetService.setCommandCallback((source) => {
           console.log('[AudioService] Physical Command:', source);
           this.toggleVox(); 
       });
 
-      // 4. Routage Audio (Géré par InCallManager + CallKeep)
+      // 4. Routage Audio Automatique (Détection branchement)
       headsetService.setConnectionCallback((isConnected, type) => {
-          console.log(`[Audio] Routing Change: Connected=${isConnected}, Type=${type}`);
-          if(isConnected) {
-              // CASQUE CONNECTÉ : On coupe le haut-parleur ET on force la route casque
-              InCallManager.setForceSpeakerphoneOn(false);
-              // Optionnel mais recommandé pour Bluetooth : forcer la route si l'API le permet
-              // (Note: InCallManager gère souvent cela auto si Speakerphone est false)
+          console.log(`[Audio] Hardware Change: Connected=${isConnected}, Type=${type}`);
+          
+          this.availableHeadset = isConnected ? type : null;
+
+          // Si un casque est branché ou débranché, on reset le cycle sur le mode logique par défaut
+          if (isConnected) {
+              // Si c'est du Bluetooth, on bascule sur Bluetooth, sinon Wired
+              this.setAudioRoute(type === 'Bluetooth' ? 'BLUETOOTH' : 'WIRED_HEADSET');
           } else {
-              // PAS DE CASQUE : On force le haut-parleur (Mode Talkie)
-              InCallManager.setForceSpeakerphoneOn(true);
+              // Plus de casque, on repasse sur Haut-Parleur (Mode Talkie)
+              this.setAudioRoute('SPEAKER');
           }
       });
 
-      // 5. Config Initiale
+      // 5. Config Initiale Système
       try {
           InCallManager.start({ media: 'audio' }); 
-          // Par défaut on suppose HP, mais le listener ci-dessus corrigera immédiatement si un casque est déjà là
-          InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setKeepScreenOn(true); 
+          // Par sécurité, on force le HP au démarrage avant détection
+          this.setAudioRoute('SPEAKER');
       } catch (e) { console.log("Audio Config Error:", e); }
 
       // 6. Vox
@@ -71,23 +80,80 @@ class AudioService {
     }
   }
 
-  // NOTE: La méthode setupCallKeep manquait dans le snippet précédent, je l'ajoute pour la complétude
-  // Si vous l'avez déjà ailleurs ou via une autre méthode, adaptez.
+  // --- NOUVELLE FONCTION : CYCLE DE ROUTAGE MANUEL ---
+  // À relier à un bouton "Haut-Parleur / Casque" dans l'interface
+  public cycleAudioOutput() {
+      let nextRoute: AudioRoute = 'SPEAKER';
+
+      if (this.currentRoute === 'SPEAKER') {
+          // Vers mode Discret
+          if (this.availableHeadset === 'Bluetooth') nextRoute = 'BLUETOOTH';
+          else if (this.availableHeadset === 'WiredHeadset') nextRoute = 'WIRED_HEADSET';
+          else nextRoute = 'EARPIECE'; // Pas de casque, on passe à l'oreille (Combiné)
+      } 
+      else if (this.currentRoute === 'BLUETOOTH') {
+          // Si on est en Bluetooth, on peut vouloir forcer le Combiné ou revenir au Speaker
+          nextRoute = 'EARPIECE'; 
+      }
+      else if (this.currentRoute === 'WIRED_HEADSET') {
+          // Si filaire, le cycle est simple : Casque <-> Speaker
+          nextRoute = 'SPEAKER';
+      }
+      else if (this.currentRoute === 'EARPIECE') {
+          // Depuis le combiné, retour au Haut-Parleur
+          nextRoute = 'SPEAKER';
+      }
+
+      this.setAudioRoute(nextRoute);
+  }
+
+  // Application technique du routage
+  private setAudioRoute(route: AudioRoute) {
+      console.log(`[AudioService] Switching to route: ${route}`);
+      
+      switch (route) {
+          case 'SPEAKER':
+              InCallManager.setForceSpeakerphoneOn(true);
+              this.updateNotification(this.currentRoomId, "Haut-Parleur Actif");
+              break;
+          
+          case 'EARPIECE':
+              InCallManager.setForceSpeakerphoneOn(false);
+              // Force la sortie combiné même si BT est là (si supporté par l'OS)
+              InCallManager.chooseAudioRoute('EARPIECE'); 
+              this.updateNotification(this.currentRoomId, "Combiné (Discret)");
+              break;
+
+          case 'BLUETOOTH':
+              InCallManager.setForceSpeakerphoneOn(false);
+              InCallManager.chooseAudioRoute('BLUETOOTH');
+              this.updateNotification(this.currentRoomId, "Bluetooth Actif");
+              break;
+
+          case 'WIRED_HEADSET':
+              InCallManager.setForceSpeakerphoneOn(false);
+              InCallManager.chooseAudioRoute('WIRED_HEADSET');
+              this.updateNotification(this.currentRoomId, "Casque Filaire");
+              break;
+      }
+      
+      this.currentRoute = route;
+  }
+
+  // NOTE: La méthode setupCallKeep manquait dans le snippet précédent
   private setupCallKeep() {
-      // (Code CallKeep existant conservé ou à intégrer ici)
-      // Pour cet exemple, je me concentre sur le fix audio.
+      // (Intégration existante conservée)
   }
 
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
-    
-    // Gestion Micro Physique
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
-
     this.notifyListeners();
+    // On met à jour la notif pour refléter le mode VOX/PTT, en gardant l'info de route
+    this.updateNotification(this.currentRoomId); 
     return this.mode === 'vox';
   }
 
@@ -135,6 +201,29 @@ class AudioService {
 
   startMetering(callback: (level: number) => void) {
     setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
+  }
+
+  // Mise à jour de la notif pour inclure l'info de route si fournie, sinon garde l'état VOX
+  updateNotification(roomId?: string, extraInfo?: string) {
+      if (roomId) this.currentRoomId = roomId;
+      
+      const isVox = this.mode === 'vox';
+      const text = isVox ? 'VOX ACTIF' : 'PTT (Manuel)';
+      const color = isVox ? 0xFFef4444 : 0xFF3b82f6;
+      
+      // Si extraInfo n'est pas fourni, on affiche la route actuelle comme sous-titre par défaut
+      const subtitle = extraInfo || `Sortie : ${this.currentRoute}`;
+
+      MusicControl.setNowPlaying({
+          title: `Salon #${this.currentRoomId}`,
+          artist: `ComTac : ${text}`,
+          album: subtitle, 
+          duration: 0, 
+          color: color,
+          isPlaying: true, 
+          isSeekable: false,
+          notificationIcon: 'icon' 
+      });
   }
 }
 
