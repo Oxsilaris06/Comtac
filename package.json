@@ -1,3 +1,4 @@
+
 {
   "name": "comtac-v14",
   "version": "1.0.0",
@@ -29,10 +30,10 @@
     "react-native-get-random-values": "~1.11.0",
     "react-native-incall-manager": "^4.1.0",
     "react-native-keyevent": "https://github.com/kevinejohn/react-native-keyevent.git",
-    "react-native-volume-manager": "^1.10.2",
-    "react-native-music-control": "^1.4.1",
-    "react-native-callkeep": "^4.3.12",
-    "react-native-uuid": "^2.0.1"
+    "react-native-volume-manager": "*", 
+    "react-native-music-control": "*",
+    "react-native-callkeep": "*",
+    "react-native-uuid": "*"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
