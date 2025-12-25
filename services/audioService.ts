@@ -1,6 +1,6 @@
 
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 import RNSoundLevel from 'react-native-sound-level';
 import InCallManager from 'react-native-incall-manager';
 import RNCallKeep from 'react-native-callkeep';
@@ -27,17 +27,20 @@ class AudioService {
     try {
       console.log("[Audio] Starting CallKeep Architecture...");
 
-      // 1. HEADSET SERVICE (Boutons Volume PTT)
-      headsetService.setCommandCallback((source) => { 
-          if (source === 'PHYSICAL_PTT_START') this.setTx(true);
-          else if (source === 'PHYSICAL_PTT_END') this.setTx(false);
-      });
-      headsetService.setConnectionCallback((isConnected, type) => { 
-          this.forceAudioRouting(isConnected);
-      });
-      headsetService.init();
+      // 1. HEADSET SERVICE
+      try {
+          headsetService.setCommandCallback((source) => { 
+              if (source === 'PHYSICAL_PTT_START') this.setTx(true);
+              else if (source === 'PHYSICAL_PTT_END') this.setTx(false);
+              else this.toggleVox();
+          });
+          headsetService.setConnectionCallback((isConnected, type) => { 
+              this.forceAudioRouting(isConnected);
+          });
+          headsetService.init();
+      } catch (e) { console.warn("HeadsetService Init Warning", e); }
 
-      // 2. CALLKEEP SETUP (Remplacement de MusicControl)
+      // 2. CALLKEEP SETUP (Critique)
       await this.setupCallKeep();
 
       // 3. MICRO
@@ -57,16 +60,15 @@ class AudioService {
         return false;
       }
 
-      // 4. DEMARRAGE DE L'APPEL FICTIF (Pour activer le mode HFP Bluetooth)
+      // 4. DEMARRAGE APPEL FICTIF
       this.startDummyCall();
 
-      // 5. CONFIG INCALL (On s'assure que InCallManager suit)
+      // 5. CONFIG INCALL
       try {
-          InCallManager.start({ media: 'audio' }); 
+          InCallManager.start({ media: 'audio', auto: true, ringback: '' }); 
           InCallManager.setKeepScreenOn(true);
           InCallManager.setMicrophoneMute(false);
-          // Délai pour laisser CallKeep s'installer
-          setTimeout(() => this.forceAudioRouting(headsetService.isHeadsetConnected), 1000);
+          setTimeout(() => this.forceAudioRouting(headsetService.isHeadsetConnected), 1500);
       } catch (e) {}
 
       this.setupVox();
@@ -85,6 +87,11 @@ class AudioService {
       if (Platform.OS !== 'android') return;
 
       try {
+          // Demande de permission Notification pour Android 13+ (Obligatoire pour Foreground Service)
+          if (Platform.Version >= 33) {
+              await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+          }
+
           await RNCallKeep.setup({
               ios: { appName: 'ComTac' },
               android: {
@@ -92,33 +99,24 @@ class AudioService {
                   alertDescription: 'ComTac a besoin de gérer les appels pour le bouton Bluetooth',
                   cancelButton: 'Annuler',
                   okButton: 'ok',
-                  imageName: 'phone_account_icon',
+                  // FIX CRITIQUE: 'ic_launcher' existe toujours, 'phone_account_icon' n'existe pas par défaut -> CRASH
+                  imageName: 'ic_launcher', 
                   additionalPermissions: [],
                   foregroundService: {
                       channelId: 'com.tactical.comtac',
-                      channelName: 'Foreground service for my app',
+                      channelName: 'Service Radio',
                       notificationTitle: 'ComTac Radio Active',
                       notificationIcon: 'ic_launcher',
                   },
-                  selfManaged: true // CRITIQUE pour ne pas montrer l'écran d'appel système complet
+                  selfManaged: true 
               },
           });
           
           RNCallKeep.setAvailable(true);
 
-          // ECOUTE DES BOUTONS BLUETOOTH VIA CALLKEEP
-          RNCallKeep.addEventListener('answerCall', ({ callUUID }) => {
-              // Certains casques envoient "Answer" au lieu de "Mute"
-              this.toggleVox();
-          });
-          
-          RNCallKeep.addEventListener('endCall', ({ callUUID }) => {
-              // Si le casque raccroche, on relance l'appel immédiatement pour garder la connexion
-              this.startDummyCall();
-          });
-
+          RNCallKeep.addEventListener('answerCall', ({ callUUID }) => this.toggleVox());
+          RNCallKeep.addEventListener('endCall', ({ callUUID }) => this.startDummyCall());
           RNCallKeep.addEventListener('didToggleMute', ({ mute, callUUID }) => {
-              // C'est l'événement STANDARD des casques HFP
               console.log("[Audio] CallKeep Toggle Mute Received");
               this.toggleVox();
           });
@@ -129,16 +127,15 @@ class AudioService {
   }
 
   private startDummyCall() {
-      // On génère un faux appel entrant/sortant pour verrouiller le focus audio
-      this.currentCallId = uuid.v4() as string;
-      const handle = "ComTac Radio";
-      
-      // On simule un appel sortant connecté
-      RNCallKeep.startCall(this.currentCallId, handle, handle, 'generic', false);
-      RNCallKeep.reportConnectedOutgoingCallWithUUID(this.currentCallId);
-      
-      // On s'assure que le "Mute" est désactivé au niveau système pour que le micro marche
-      RNCallKeep.setMutedCall(this.currentCallId, false);
+      try {
+          this.currentCallId = uuid.v4() as string;
+          const handle = "ComTac Radio";
+          RNCallKeep.startCall(this.currentCallId, handle, handle, 'generic', false);
+          RNCallKeep.reportConnectedOutgoingCallWithUUID(this.currentCallId);
+          RNCallKeep.setMutedCall(this.currentCallId, false);
+      } catch (e) {
+          console.warn("Start Dummy Call Error", e);
+      }
   }
 
   // --- ROUTAGE AUDIO ---
@@ -165,10 +162,9 @@ class AudioService {
 
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // Feedback Sonore via InCallManager (Bip dans le flux audio)
     try {
         if (this.mode === 'vox') InCallManager.startRingtone('_BUNDLE_', [100]); 
-        else InCallManager.startRingtone('_BUNDLE_', [100, 50, 100]); // Double bip fin
+        else InCallManager.startRingtone('_BUNDLE_', [100, 50, 100]); 
         setTimeout(() => InCallManager.stopRingtone(), 300);
     } catch (e) {}
 
@@ -177,7 +173,6 @@ class AudioService {
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
     
-    // Synchro état CallKeep (Optionnel, pour l'affichage voiture)
     if (this.currentCallId) {
         RNCallKeep.setMutedCall(this.currentCallId, this.mode === 'ptt');
     }
@@ -198,7 +193,6 @@ class AudioService {
       } catch (e) {}
   }
 
-  // Plus besoin de "KeepAlive" timer, CallKeep maintient le service
   private startKeepAlive() {}
 
   setTx(state: boolean) {
@@ -211,7 +205,6 @@ class AudioService {
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
   
-  // Stubs
   muteIncoming(mute: boolean) {}
   playStream(remoteStream: MediaStream) {}
 }
