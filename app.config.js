@@ -42,7 +42,7 @@ module.exports = function(config) {
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-                "android.permission.FOREGROUND_SERVICE_PHONE_CALL", // Requis pour CallKeep Android 14
+                "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
                 "android.permission.WAKE_LOCK",
                 "android.permission.BLUETOOTH",
                 "android.permission.BLUETOOTH_CONNECT",
@@ -76,7 +76,7 @@ module.exports = function(config) {
   );
 };
 
-// --- PLUGIN CALLKEEP (NOUVEAU) ---
+// --- PLUGIN 1 : CONFIGURATION CALLKEEP (CRITIQUE) ---
 function withCallKeepActivity(config) {
   return withAndroidManifest(config, async (config) => {
     const manifest = config.modResults.manifest;
@@ -85,14 +85,14 @@ function withCallKeepActivity(config) {
     // Ajout du Service de Connexion (Cœur de CallKeep)
     if (!app.service) app.service = [];
     
-    // On évite les doublons
+    // On évite les doublons si le plugin tourne plusieurs fois
     if (!app.service.some(s => s.$['android:name'] === 'io.wazo.callkeep.VoiceConnectionService')) {
         app.service.push({
             $: {
                 'android:name': 'io.wazo.callkeep.VoiceConnectionService',
                 'android:label': 'Wazo',
                 'android:permission': 'android.permission.BIND_TELECOM_CONNECTION_SERVICE',
-                'android:foregroundServiceType': 'phoneCall|camera|microphone' // Pour Android 14
+                'android:foregroundServiceType': 'phoneCall|camera|microphone' // Indispensable pour Android 14
             },
             'intent-filter': [{
                 'action': [{ $: { 'android:name': 'android.telecom.ConnectionService' } }]
@@ -100,7 +100,7 @@ function withCallKeepActivity(config) {
         });
     }
     
-    // Ajout du RNCallKeepBackgroundMessagingService (Optionnel mais recommandé)
+    // Service de messagerie CallKeep (Optionnel mais recommandé)
     if (!app.service.some(s => s.$['android:name'] === 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService')) {
        app.service.push({
            $: { 'android:name': 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService' }
@@ -111,9 +111,7 @@ function withCallKeepActivity(config) {
   });
 }
 
-// ... (Garder les autres plugins existants: withMainActivityInjection, withAccessibilityService, etc.)
-// Je remets les anciens pour que le fichier soit complet et valide
-
+// --- PLUGIN 2 : INJECTION KOTLIN (KEYEVENT) ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -129,6 +127,7 @@ function withMainActivityInjection(config) {
         'import com.github.kevinejohn.keyevent.KeyEventModule'
       ];
 
+      // Injection des imports
       if (src.includes('package com.tactical.comtac')) {
          const packageLine = 'package com.tactical.comtac';
          let importsBlock = "";
@@ -140,6 +139,7 @@ function withMainActivityInjection(config) {
          }
       }
 
+      // Injection du BroadcastReceiver pour les boutons physiques
       if (!src.includes('private val comTacReceiver')) {
         const lastBrace = src.lastIndexOf('}');
         const codeToInject = `
@@ -148,6 +148,7 @@ function withMainActivityInjection(config) {
     override fun onReceive(context: Context, intent: Intent) {
       if ("COMTAC_HARDWARE_EVENT" == intent.action) {
         val keyCode = intent.getIntExtra("keyCode", 0)
+        // Null Check crucial pour éviter le crash au boot
         if (KeyEventModule.getInstance() != null) {
             KeyEventModule.getInstance().onKeyDownEvent(keyCode, null)
         }
@@ -156,6 +157,7 @@ function withMainActivityInjection(config) {
   }
 
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    // Interception prioritaire
     if (event.action == KeyEvent.ACTION_DOWN) {
        if (KeyEventModule.getInstance() != null) {
            KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
@@ -168,6 +170,7 @@ function withMainActivityInjection(config) {
         src = src.substring(0, lastBrace) + codeToInject + src.substring(lastBrace);
       }
 
+      // Enregistrement du Receiver au démarrage
       const registerCode = `
     val filter = IntentFilter("COMTAC_HARDWARE_EVENT")
     if (android.os.Build.VERSION.SDK_INT >= 34) {
@@ -187,6 +190,7 @@ function withMainActivityInjection(config) {
   });
 }
 
+// --- PLUGIN 3 : SERVICE D'ACCESSIBILITÉ (Boutons Hardcore) ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -278,6 +282,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
   return config;
 }
 
+// --- PLUGIN 4 : BUILD GRADLE FIX (Compilateur) ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
@@ -296,6 +301,7 @@ function withKeyEventBuildGradleFix(config) {
   ]);
 }
 
+// --- PLUGIN 5 : MUSIC CONTROL SERVICE ---
 function withMusicControlFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
