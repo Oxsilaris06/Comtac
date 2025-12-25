@@ -102,4 +102,4 @@ Voir le fichier PRIVACY.md pour plus de détails.
 
 ✍️ Auteur
 
-Développé par Oxsilaris06 (Nicolas Maheux).
+Développé par Oxsilaris06.
