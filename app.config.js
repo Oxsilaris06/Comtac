@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
+  // L'ordre des plugins est important
   return withCallKeepActivity(
     withAccessibilityService(
       withKeyEventBuildGradleFix(
@@ -40,14 +41,18 @@ module.exports = function(config) {
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
                 "android.permission.FOREGROUND_SERVICE",
+                // AJOUTS CRITIQUES POUR ANDROID 14 & CALLKEEP
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                 "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
                 "android.permission.WAKE_LOCK",
+                "android.permission.BATTERY_STATS",
                 "android.permission.BLUETOOTH",
                 "android.permission.BLUETOOTH_CONNECT",
                 "android.permission.MODIFY_AUDIO_SETTINGS",
                 "android.permission.BIND_ACCESSIBILITY_SERVICE",
+                "android.permission.SYSTEM_ALERT_WINDOW",
+                "android.permission.REORDER_TASKS",
                 "android.permission.MANAGE_OWN_CALLS",
                 "android.permission.READ_PHONE_STATE",
                 "android.permission.CALL_PHONE"
@@ -63,7 +68,10 @@ module.exports = function(config) {
                       compileSdkVersion: 34, 
                       buildToolsVersion: "34.0.0", 
                       targetSdkVersion: 34 
-                    } 
+                    },
+                    ios: {
+                      deploymentTarget: "13.4"
+                    }
                   }
                 ],
                 "@config-plugins/react-native-webrtc"
@@ -76,7 +84,7 @@ module.exports = function(config) {
   );
 };
 
-// --- PLUGIN 1 : CONFIGURATION CALLKEEP (CRITIQUE) ---
+// --- PLUGIN 1 : CONFIGURATION CALLKEEP (NOUVEAU & CRITIQUE) ---
 function withCallKeepActivity(config) {
   return withAndroidManifest(config, async (config) => {
     const manifest = config.modResults.manifest;
@@ -100,7 +108,7 @@ function withCallKeepActivity(config) {
         });
     }
     
-    // Service de messagerie CallKeep (Optionnel mais recommandé)
+    // Service de messagerie CallKeep (Optionnel mais recommandé pour la stabilité)
     if (!app.service.some(s => s.$['android:name'] === 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService')) {
        app.service.push({
            $: { 'android:name': 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService' }
@@ -111,7 +119,7 @@ function withCallKeepActivity(config) {
   });
 }
 
-// --- PLUGIN 2 : INJECTION KOTLIN (KEYEVENT) ---
+// --- PLUGIN 2 : INJECTION KOTLIN (KEYEVENT) - VERSION SÉCURISÉE ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -190,7 +198,7 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- PLUGIN 3 : SERVICE D'ACCESSIBILITÉ (Boutons Hardcore) ---
+// --- PLUGIN 3 : SERVICE D'ACCESSIBILITÉ ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -294,6 +302,13 @@ function withKeyEventBuildGradleFix(config) {
         contents = contents.replace(/buildToolsVersion\s+.*$/gm, 'buildToolsVersion "34.0.0"');
         contents = contents.replace(/targetSdkVersion\s+.*$/gm, 'targetSdkVersion 34');
         contents = contents.replace(/minSdkVersion\s+.*$/gm, 'minSdkVersion 24');
+        if (!contents.includes('compileOptions')) {
+            contents = contents.replace(/android\s*{/, `android {
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }`);
+        }
         fs.writeFileSync(file, contents);
       }
       return config;
