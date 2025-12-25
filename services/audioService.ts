@@ -4,6 +4,7 @@ import RNSoundLevel from 'react-native-sound-level';
 import MusicControl, { Command } from 'react-native-music-control';
 import InCallManager from 'react-native-incall-manager';
 import { headsetService } from './headsetService';
+import { VolumeManager } from 'react-native-volume-manager';
 
 class AudioService {
   stream: MediaStream | null = null;
@@ -24,32 +25,48 @@ class AudioService {
     try {
       console.log("[Audio] Initializing...");
 
-      // 1. HEADSET SERVICE (Gère désormais TOUS les boutons physiques)
+      // 1. HEADSET SERVICE (Le Chef d'Orchestre des boutons)
       headsetService.setCommandCallback((source) => { 
-          // Que ce soit un bouton BT, Filaire ou Volume, on toggle le VOX
+          // C'est le point d'entrée unique pour toutes les commandes (BT, Tactile, Volume)
+          console.log(`[Audio] Toggle Request from ${source}`);
           this.toggleVox(); 
       });
+      
       headsetService.setConnectionCallback((isConnected, type) => { 
           this.handleRouteUpdate(isConnected, type); 
       });
+      
       headsetService.init();
 
-      // 2. CONFIG SYSTEME (Mode Communication)
+      // 2. CONFIG AUDIO SYSTEME (InCallManager - Priorité Audio)
       try {
-          // On démarre en mode AUDIO (VoIP)
+          // On force le mode AUDIO pour WebRTC
           InCallManager.start({ media: 'audio', auto: true, ringback: '' }); 
           InCallManager.setKeepScreenOn(true);
           InCallManager.setMicrophoneMute(false);
           
-          // Initialisation du routage
+          // Routage initial
           this.handleRouteUpdate(headsetService.isHeadsetConnected, 'Initial');
       } catch (e) {
           console.warn("[Audio] InCallManager Error:", e);
       }
 
-      // 3. MICRO
+      // 3. MICRO (Avec filtres WebRTC conservés)
       try {
-        const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
+        const constraints = {
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                googEchoCancellation: true,
+                googAutoGainControl: true,
+                googNoiseSuppression: true,
+                googHighpassFilter: true
+            },
+            video: false
+        };
+
+        const stream = await mediaDevices.getUserMedia(constraints) as MediaStream;
         this.stream = stream;
         this.setTx(false); 
       } catch (e) {
@@ -57,11 +74,13 @@ class AudioService {
         return false;
       }
 
-      // 4. MUSIC CONTROL (Affichage UI uniquement)
+      // 4. CONFIG UI MEDIA (MusicControl - Priorité Visuelle)
       this.setupMusicControl();
       
       this.setupVox();
       this.startKeepAlive();
+      
+      try { await VolumeManager.setVolume(0.8); } catch (e) {}
 
       this.isInitialized = true;
       return true;
@@ -71,22 +90,18 @@ class AudioService {
     }
   }
 
-  // --- ROUTAGE AUDIO ---
+  // --- ROUTAGE ---
   private handleRouteUpdate(isConnected: boolean, type: string) {
       console.log(`[Audio] Routing Update -> Headset: ${isConnected} (${type})`);
-      
       if(isConnected) {
-          // CASQUE : On désactive le HP externe
           InCallManager.setForceSpeakerphoneOn(false);
           InCallManager.setSpeakerphoneOn(false);
           this.updateNotification(`Casque (${type})`);
       } else {
-          // HP : On force le HP externe (Talkie)
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
           this.updateNotification(`Haut-Parleur`);
       }
-      
       setTimeout(() => this.refreshMediaFocus(), 1000);
   }
 
@@ -97,34 +112,32 @@ class AudioService {
   }
   private notifyListeners() { this.listeners.forEach(cb => cb(this.mode)); }
 
-  // --- GESTION NOTIFICATION & UI ---
+  // --- CONFIGURATION MUSIC CONTROL (MODE HYBRIDE) ---
   private setupMusicControl() {
       if (Platform.OS !== 'android') return;
       try {
-          // On arrête tout contrôle précédent pour repartir propre
           MusicControl.stopControl();
           
-          // On active le mode background pour garder le service vivant
+          // IMPORTANT : On active le background mode pour intercepter les événements
+          // MAIS on désactive "handleAudioInterruptions" pour ne pas couper WebRTC
           MusicControl.enableBackgroundMode(true);
+          MusicControl.handleAudioInterruptions(false); 
           
-          // On active UNIQUEMENT Play/Pause pour l'interaction TACTILE sur l'écran verrouillé
+          // On active les commandes standards
           MusicControl.enableControl('play', true);
           MusicControl.enableControl('pause', true);
           MusicControl.enableControl('togglePlayPause', true);
           
-          // On désactive le reste pour éviter la confusion
+          // Désactivation des commandes inutiles
           MusicControl.enableControl('stop', false);
           MusicControl.enableControl('nextTrack', false);
           MusicControl.enableControl('previousTrack', false);
-          
           MusicControl.enableControl('closeNotification', false, { when: 'never' });
           
-          // Handler pour les CLICS TACTILES sur la notif
-          const trigger = () => {
-              // On passe par headsetService pour bénéficier du debounce global
-              // Cela évite le conflit si le bouton physique déclenche aussi MusicControl
-              headsetService.triggerCommand('NOTIFICATION_UI_TOUCH');
-          };
+          // REDIRECTION VERS HEADSET SERVICE
+          // Si l'utilisateur clique sur la notif ou si Android envoie une commande Média
+          // On passe par headsetService pour gérer le debounce (anti-doublon)
+          const trigger = () => headsetService.triggerCommand('MEDIA_CTRL_EVENT');
           
           MusicControl.on(Command.play, trigger);
           MusicControl.on(Command.pause, trigger);
@@ -136,24 +149,30 @@ class AudioService {
 
   private refreshMediaFocus() {
       if (Platform.OS === 'android') {
-          // Keep Alive: on simule une lecture pour ne pas être tué par Android
-          MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING, elapsedTime: 0 });
+          // Astuce : On dit à Android "Je joue de la musique" pour garder le service vivant
+          // Mais InCallManager a déjà pris le canal Audio réel, donc pas de conflit sonore.
+          MusicControl.updatePlayback({ 
+              state: MusicControl.STATE_PLAYING, 
+              elapsedTime: 0 
+          });
       }
   }
 
   toggleVox() {
-    // Protection anti-conflit PTT tactile vs Bouton physique
+    // Sécurité : Si on appuie sur le PTT tactile, on ignore les commandes physiques
+    // pour éviter de couper la parole par erreur.
     if (this.isTx && this.mode === 'ptt') {
-        console.log("[Audio] Toggle ignoré car PTT tactile maintenu");
         return;
     }
 
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
+    // Si on repasse en PTT manuel, on coupe le micro immédiatement
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
+    
     this.updateNotification();
     this.notifyListeners();
   }
@@ -168,7 +187,7 @@ class AudioService {
           album: extraInfo || (isVox ? 'Micro Ouvert' : 'En attente'), 
           duration: 0, 
           color: isVox ? 0xFFef4444 : 0xFF3b82f6,
-          isPlaying: true, // Toujours à true pour garder la notif active
+          isPlaying: true, // Toujours True pour garder les boutons de notif actifs
           notificationIcon: 'ic_launcher' 
       });
   }
