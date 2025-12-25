@@ -1,26 +1,19 @@
+
 import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 
 const KEY_CODES = {
     VOLUME_UP: 24,
     VOLUME_DOWN: 25,
-    // Codes critiques pour le Bluetooth
+    // Nous écoutons encore ces codes pour les cas où CallKeep n'est pas actif (menu, etc)
     HEADSET_HOOK: 79,     
     MEDIA_PLAY_PAUSE: 85,
-    MEDIA_STOP: 86,
-    MEDIA_NEXT: 87,
-    MEDIA_PREVIOUS: 88,
-    MEDIA_PLAY: 126,
-    MEDIA_PAUSE: 127
 };
 
 type CommandCallback = (source: string) => void;
 type ConnectionCallback = (isConnected: boolean, type: string) => void;
 
 class HeadsetService {
-    private lastCommandTime: number = 0;
-    
-    // État pour le PTT Volume Simultané
     private volUpPressed: boolean = false;
     private volDownPressed: boolean = false;
     private isPhysicalPttActive: boolean = false;
@@ -52,7 +45,7 @@ class HeadsetService {
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
     public setConnectionCallback(callback: ConnectionCallback) { this.onConnectionChange = callback; }
 
-    // --- 1. DÉTECTION CONNEXION ---
+    // --- 1. DÉTECTION ROUTAGE (InCallManager) ---
     private setupConnectionListener() {
         if (NativeModules.InCallManager) {
             this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
@@ -75,33 +68,26 @@ class HeadsetService {
         }
     }
 
-    // --- 2. INTERCEPTION BOUTONS PHYSIQUES ---
+    // --- 2. INTERCEPTION BOUTONS PHYSIQUES (Focus: VOLUME PTT) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             // PRESSION
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
                 const code = keyEvent.keyCode;
 
-                // Logique PTT Physique (Volume Up + Down)
+                // LOGIQUE PTT PHYSIQUE (VOLUME UP + DOWN)
                 if (code === KEY_CODES.VOLUME_UP) this.volUpPressed = true;
                 if (code === KEY_CODES.VOLUME_DOWN) this.volDownPressed = true;
 
                 if (this.volUpPressed && this.volDownPressed && !this.isPhysicalPttActive) {
                     this.isPhysicalPttActive = true;
-                    this.triggerCommand('PHYSICAL_PTT_START');
+                    if (this.onCommand) this.onCommand('PHYSICAL_PTT_START');
                     return;
                 }
-                if (this.isPhysicalPttActive) return;
-
-                // Logique Bluetooth / Média
-                // On accepte TOUS les codes possibles
-                const isMedia = [
-                    KEY_CODES.HEADSET_HOOK, KEY_CODES.MEDIA_PLAY_PAUSE, 
-                    KEY_CODES.MEDIA_PLAY, KEY_CODES.MEDIA_PAUSE, KEY_CODES.MEDIA_STOP
-                ].includes(code);
-
-                if (isMedia) {
-                    this.triggerCommand('HEADSET_TOGGLE_VOX');
+                
+                // Si on a pas de casque, on peut vouloir utiliser Volume Up comme toggle simple
+                if (code === KEY_CODES.VOLUME_UP && !this.isPhysicalPttActive && !this.volDownPressed) {
+                    // Optionnel : ajouter une logique ici si vous voulez que VolUp seul fasse quelque chose
                 }
             });
 
@@ -113,25 +99,10 @@ class HeadsetService {
 
                 if (this.isPhysicalPttActive && (!this.volUpPressed || !this.volDownPressed)) {
                     this.isPhysicalPttActive = false;
-                    this.triggerCommand('PHYSICAL_PTT_END');
+                    if (this.onCommand) this.onCommand('PHYSICAL_PTT_END');
                 }
             });
         }
-    }
-
-    // --- 3. GATEKEEPER ---
-    public triggerCommand(source: string) {
-        if (source.includes('PHYSICAL_PTT')) {
-            if (this.onCommand) this.onCommand(source);
-            return;
-        }
-
-        const now = Date.now();
-        // Debounce 300ms pour éviter doublons (BT + MusicControl)
-        if (now - this.lastCommandTime < 300) return;
-
-        this.lastCommandTime = now;
-        if (this.onCommand) this.onCommand(source);
     }
 }
 
