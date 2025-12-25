@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
-  // L'ordre des plugins est important
+  // L'ordre des plugins est important pour la fusion du Manifest
   return withCallKeepActivity(
     withAccessibilityService(
       withKeyEventBuildGradleFix(
@@ -41,7 +41,6 @@ module.exports = function(config) {
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
                 "android.permission.FOREGROUND_SERVICE",
-                // AJOUTS CRITIQUES POUR ANDROID 14 & CALLKEEP
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                 "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
@@ -67,7 +66,9 @@ module.exports = function(config) {
                       minSdkVersion: 24, 
                       compileSdkVersion: 34, 
                       buildToolsVersion: "34.0.0", 
-                      targetSdkVersion: 34 
+                      targetSdkVersion: 34,
+                      // Ajout critique pour résoudre les conflits de Manifest
+                      extraMavenRepos: ["https://www.jitpack.io"]
                     },
                     ios: {
                       deploymentTarget: "13.4"
@@ -84,23 +85,23 @@ module.exports = function(config) {
   );
 };
 
-// --- PLUGIN 1 : CONFIGURATION CALLKEEP (NOUVEAU & CRITIQUE) ---
+// --- PLUGIN 1 : CALLKEEP FIXED ---
 function withCallKeepActivity(config) {
   return withAndroidManifest(config, async (config) => {
     const manifest = config.modResults.manifest;
     const app = manifest.application[0];
 
-    // Ajout du Service de Connexion (Cœur de CallKeep)
     if (!app.service) app.service = [];
     
-    // On évite les doublons si le plugin tourne plusieurs fois
+    // VoiceConnectionService : AJOUT DE android:exported="true"
     if (!app.service.some(s => s.$['android:name'] === 'io.wazo.callkeep.VoiceConnectionService')) {
         app.service.push({
             $: {
                 'android:name': 'io.wazo.callkeep.VoiceConnectionService',
                 'android:label': 'Wazo',
                 'android:permission': 'android.permission.BIND_TELECOM_CONNECTION_SERVICE',
-                'android:foregroundServiceType': 'phoneCall|camera|microphone' // Indispensable pour Android 14
+                'android:foregroundServiceType': 'phoneCall|camera|microphone',
+                'android:exported': 'true' // <--- FIX CRITIQUE ANDROID 12+
             },
             'intent-filter': [{
                 'action': [{ $: { 'android:name': 'android.telecom.ConnectionService' } }]
@@ -108,10 +109,13 @@ function withCallKeepActivity(config) {
         });
     }
     
-    // Service de messagerie CallKeep (Optionnel mais recommandé pour la stabilité)
+    // BackgroundMessagingService
     if (!app.service.some(s => s.$['android:name'] === 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService')) {
        app.service.push({
-           $: { 'android:name': 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService' }
+           $: { 
+               'android:name': 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService',
+               'android:exported': 'true' // Par sécurité
+           }
        });
     }
 
@@ -119,7 +123,7 @@ function withCallKeepActivity(config) {
   });
 }
 
-// --- PLUGIN 2 : INJECTION KOTLIN (KEYEVENT) - VERSION SÉCURISÉE ---
+// --- PLUGIN 2 : KEYEVENT INJECTION ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -135,7 +139,6 @@ function withMainActivityInjection(config) {
         'import com.github.kevinejohn.keyevent.KeyEventModule'
       ];
 
-      // Injection des imports
       if (src.includes('package com.tactical.comtac')) {
          const packageLine = 'package com.tactical.comtac';
          let importsBlock = "";
@@ -147,16 +150,13 @@ function withMainActivityInjection(config) {
          }
       }
 
-      // Injection du BroadcastReceiver pour les boutons physiques
       if (!src.includes('private val comTacReceiver')) {
         const lastBrace = src.lastIndexOf('}');
         const codeToInject = `
-  // --- COMTAC INJECTION START ---
   private val comTacReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
       if ("COMTAC_HARDWARE_EVENT" == intent.action) {
         val keyCode = intent.getIntExtra("keyCode", 0)
-        // Null Check crucial pour éviter le crash au boot
         if (KeyEventModule.getInstance() != null) {
             KeyEventModule.getInstance().onKeyDownEvent(keyCode, null)
         }
@@ -165,7 +165,6 @@ function withMainActivityInjection(config) {
   }
 
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-    // Interception prioritaire
     if (event.action == KeyEvent.ACTION_DOWN) {
        if (KeyEventModule.getInstance() != null) {
            KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
@@ -173,12 +172,10 @@ function withMainActivityInjection(config) {
     }
     return super.dispatchKeyEvent(event)
   }
-  // --- COMTAC INJECTION END ---
 `;
         src = src.substring(0, lastBrace) + codeToInject + src.substring(lastBrace);
       }
 
-      // Enregistrement du Receiver au démarrage
       const registerCode = `
     val filter = IntentFilter("COMTAC_HARDWARE_EVENT")
     if (android.os.Build.VERSION.SDK_INT >= 34) {
@@ -198,7 +195,7 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- PLUGIN 3 : SERVICE D'ACCESSIBILITÉ ---
+// --- PLUGIN 3 : ACCESSIBILITY SERVICE ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -290,7 +287,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
   return config;
 }
 
-// --- PLUGIN 4 : BUILD GRADLE FIX (Compilateur) ---
+// --- PLUGIN 4 : BUILD GRADLE FIX ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
