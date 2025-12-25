@@ -24,9 +24,9 @@ class AudioService {
     try {
       console.log("[Audio] Initializing...");
 
-      // 1. LIASION HEADSET (Entrées)
+      // 1. HEADSET SERVICE (Gère désormais TOUS les boutons physiques)
       headsetService.setCommandCallback((source) => { 
-          // Logique unifiée : Une commande physique = Toggle VOX
+          // Que ce soit un bouton BT, Filaire ou Volume, on toggle le VOX
           this.toggleVox(); 
       });
       headsetService.setConnectionCallback((isConnected, type) => { 
@@ -34,14 +34,14 @@ class AudioService {
       });
       headsetService.init();
 
-      // 2. CONFIG SYSTEME (Sorties)
+      // 2. CONFIG SYSTEME (Mode Communication)
       try {
-          // 'audio' est parfois trop générique, on force des flags pour le VoIP
+          // On démarre en mode AUDIO (VoIP)
           InCallManager.start({ media: 'audio', auto: true, ringback: '' }); 
           InCallManager.setKeepScreenOn(true);
-          InCallManager.setMicrophoneMute(false); // Sécurité
+          InCallManager.setMicrophoneMute(false);
           
-          // Force l'état initial correct
+          // Initialisation du routage
           this.handleRouteUpdate(headsetService.isHeadsetConnected, 'Initial');
       } catch (e) {
           console.warn("[Audio] InCallManager Error:", e);
@@ -57,8 +57,9 @@ class AudioService {
         return false;
       }
 
-      // 4. MODULES
+      // 4. MUSIC CONTROL (Affichage UI uniquement)
       this.setupMusicControl();
+      
       this.setupVox();
       this.startKeepAlive();
 
@@ -70,23 +71,22 @@ class AudioService {
     }
   }
 
-  // --- GESTION DU ROUTAGE AUDIO (CORRIGÉ) ---
+  // --- ROUTAGE AUDIO ---
   private handleRouteUpdate(isConnected: boolean, type: string) {
       console.log(`[Audio] Routing Update -> Headset: ${isConnected} (${type})`);
       
       if(isConnected) {
-          // CASQUE : On force TOUT vers le casque
+          // CASQUE : On désactive le HP externe
           InCallManager.setForceSpeakerphoneOn(false);
-          InCallManager.setSpeakerphoneOn(false); // Double sécurité
+          InCallManager.setSpeakerphoneOn(false);
           this.updateNotification(`Casque (${type})`);
       } else {
-          // HP : On force TOUT vers le HP
+          // HP : On force le HP externe (Talkie)
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
           this.updateNotification(`Haut-Parleur`);
       }
       
-      // Petit délai pour laisser l'OS digérer le changement avant de relancer le focus
       setTimeout(() => this.refreshMediaFocus(), 1000);
   }
 
@@ -97,21 +97,34 @@ class AudioService {
   }
   private notifyListeners() { this.listeners.forEach(cb => cb(this.mode)); }
 
+  // --- GESTION NOTIFICATION & UI ---
   private setupMusicControl() {
       if (Platform.OS !== 'android') return;
       try {
+          // On arrête tout contrôle précédent pour repartir propre
           MusicControl.stopControl();
+          
+          // On active le mode background pour garder le service vivant
           MusicControl.enableBackgroundMode(true);
           
-          // On active UNIQUEMENT les commandes basiques pour éviter les conflits
+          // On active UNIQUEMENT Play/Pause pour l'interaction TACTILE sur l'écran verrouillé
           MusicControl.enableControl('play', true);
           MusicControl.enableControl('pause', true);
           MusicControl.enableControl('togglePlayPause', true);
           
+          // On désactive le reste pour éviter la confusion
+          MusicControl.enableControl('stop', false);
+          MusicControl.enableControl('nextTrack', false);
+          MusicControl.enableControl('previousTrack', false);
+          
           MusicControl.enableControl('closeNotification', false, { when: 'never' });
           
-          // Tous les events Bluetooth redirigent vers HeadsetService qui filtre
-          const trigger = () => headsetService.triggerCommand('BLUETOOTH_AVRCP');
+          // Handler pour les CLICS TACTILES sur la notif
+          const trigger = () => {
+              // On passe par headsetService pour bénéficier du debounce global
+              // Cela évite le conflit si le bouton physique déclenche aussi MusicControl
+              headsetService.triggerCommand('NOTIFICATION_UI_TOUCH');
+          };
           
           MusicControl.on(Command.play, trigger);
           MusicControl.on(Command.pause, trigger);
@@ -123,15 +136,15 @@ class AudioService {
 
   private refreshMediaFocus() {
       if (Platform.OS === 'android') {
-          // Simule une lecture silencieuse pour garder le canal audio ouvert
+          // Keep Alive: on simule une lecture pour ne pas être tué par Android
           MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING, elapsedTime: 0 });
       }
   }
 
   toggleVox() {
-    // Si on est déjà en train de transmettre (via PTT tactile), on ne fait rien pour éviter le conflit
+    // Protection anti-conflit PTT tactile vs Bouton physique
     if (this.isTx && this.mode === 'ptt') {
-        console.log("[Audio] Toggle ignoré car TX en cours");
+        console.log("[Audio] Toggle ignoré car PTT tactile maintenu");
         return;
     }
 
@@ -147,13 +160,15 @@ class AudioService {
 
   updateNotification(extraInfo?: string) {
       const isVox = this.mode === 'vox';
+      const stateText = isVox ? 'VOX ON (Parlez)' : 'PTT (Appuyez)';
+      
       MusicControl.setNowPlaying({
           title: `Radio Tactique`,
-          artist: isVox ? 'VOX ON (Parlez)' : 'PTT (Appuyez)',
+          artist: stateText,
           album: extraInfo || (isVox ? 'Micro Ouvert' : 'En attente'), 
           duration: 0, 
           color: isVox ? 0xFFef4444 : 0xFF3b82f6,
-          isPlaying: true, 
+          isPlaying: true, // Toujours à true pour garder la notif active
           notificationIcon: 'ic_launcher' 
       });
   }
@@ -162,10 +177,8 @@ class AudioService {
       try {
         RNSoundLevel.start();
         RNSoundLevel.onNewFrame = (data: any) => {
-            // Uniquement si VOX est actif
             if (this.mode === 'vox' && data.value > this.voxThreshold) {
                 if (!this.isTx) this.setTx(true);
-                
                 if (this.voxTimer) clearTimeout(this.voxTimer);
                 this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
             }
@@ -182,22 +195,19 @@ class AudioService {
     if (this.isTx === state) return;
     this.isTx = state;
     
-    // Application Mute/Unmute WebRTC
     if (this.stream) {
         this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
     
-    // Feedback
     if(this.mode === 'vox') this.updateNotification();
   }
-
+  
+  // Stubs
+  muteIncoming(mute: boolean) {}
+  playStream(remoteStream: MediaStream) {}
   startMetering(callback: (level: number) => void) {
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
-  
-  // Stubs pour compatibilité future
-  muteIncoming(mute: boolean) {}
-  playStream(remoteStream: MediaStream) {}
 }
 
 export const audioService = new AudioService();
