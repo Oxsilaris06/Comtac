@@ -1,4 +1,3 @@
-
 {
   "name": "comtac-v14",
   "version": "1.0.0",
@@ -35,7 +34,8 @@
     "react-native-callkeep": "*",
     "react-native-uuid": "*",
     "react-native-qrcode-svg": "*",
-    "react-native-svg": "15.8.0"
+    "react-native-svg": "15.8.0",
+    "react-native-sound-level": "*"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
