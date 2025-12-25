@@ -1,3 +1,4 @@
+
 import './polyfills'; 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
@@ -25,7 +26,7 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 import PrivacyConsentModal from './components/PrivacyConsentModal';
-// NOUVEAU COMPOSANT
+// Import du nouveau composant pour la modale
 import OperatorActionModal from './components/OperatorActionModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -635,7 +636,6 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      {/* --- INTEGRATION PROPRE DU NOUVEAU COMPOSANT --- */}
       <OperatorActionModal 
         visible={!!selectedOperatorId}
         targetOperator={selectedOperatorId ? peers[selectedOperatorId] : null}
