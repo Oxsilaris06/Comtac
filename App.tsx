@@ -1,9 +1,8 @@
-
 import './polyfills'; 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
-  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView, ActivityIndicator
+  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView, ActivityIndicator, PermissionsAndroid
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
@@ -26,7 +25,6 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 import PrivacyConsentModal from './components/PrivacyConsentModal';
-// Import du nouveau composant pour la modale
 import OperatorActionModal from './components/OperatorActionModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -314,6 +312,11 @@ const App: React.FC = () => {
     console.log("[App] Starting Services Sequence...");
 
     try {
+        // PERMISSIONS CRITIQUES ANDROID 13+
+        if (Platform.OS === 'android' && Platform.Version >= 33) {
+            await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+        }
+
         const audioStatus = await Audio.requestPermissionsAsync();
         if (!audioStatus.granted) {
             Alert.alert("Erreur Micro", "L'accès au micro est requis.");
