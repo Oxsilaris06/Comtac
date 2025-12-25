@@ -1,12 +1,14 @@
 import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 
-// Codes Android Natifs
+// Codes Android Natifs pour les boutons
 const KEY_CODES = {
     VOLUME_UP: 24, 
     VOLUME_DOWN: 25, 
-    HEADSET_HOOK: 79, // <--- LE code envoyé par les écouteurs en mode "Appel"    
-    MEDIA_PLAY_PAUSE: 85, // Le code envoyé en mode "Musique"
+    // LE CODE MAGIQUE : 79 est envoyé quand on est en mode "Appel" (InCall)
+    HEADSET_HOOK: 79,     
+    // LE CODE CLASSIQUE : 85 est envoyé quand on est en mode "Musique"
+    MEDIA_PLAY_PAUSE: 85, 
     MEDIA_NEXT: 87, 
     MEDIA_PREVIOUS: 88,
     MEDIA_PLAY: 126, 
@@ -41,7 +43,7 @@ class HeadsetService {
             this.subscription = null;
         }
         if (Platform.OS === 'android') {
-             // On s'assure de ne pas empiler les listeners
+             // Nettoyage préventif
              KeyEvent.removeKeyDownListener();
         }
     }
@@ -75,7 +77,7 @@ class HeadsetService {
         }
     }
 
-    // --- 2. INTERCEPTION BOUTONS PHYSIQUES (Le cœur du fix) ---
+    // --- 2. INTERCEPTION BOUTONS PHYSIQUES (Double Écoute) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
@@ -96,27 +98,30 @@ class HeadsetService {
                     return;
                 }
 
-                // C. BOUTON PRINCIPAL CASQUE (Play/Pause/Hook)
-                // C'est ici que ça se joue : on accepte le 79 (Mode Appel) ET le 85 (Mode Musique)
-                // On traite les deux comme une commande d'action unique.
-                if (code === KEY_CODES.HEADSET_HOOK || code === KEY_CODES.MEDIA_PLAY_PAUSE || code === KEY_CODES.MEDIA_PLAY || code === KEY_CODES.MEDIA_PAUSE) {
+                // C. BOUTON PRINCIPAL CASQUE (LE CŒUR DU SYSTÈME)
+                // On intercepte TOUS les codes possibles pour un bouton "Play/Action".
+                // Que le téléphone soit en mode Appel (79) ou Média (85/126...), on déclenche.
+                if (
+                    code === KEY_CODES.HEADSET_HOOK ||      // Mode Appel
+                    code === KEY_CODES.MEDIA_PLAY_PAUSE ||  // Mode Musique
+                    code === KEY_CODES.MEDIA_PLAY || 
+                    code === KEY_CODES.MEDIA_PAUSE ||
+                    code === KEY_CODES.MEDIA_STOP
+                ) {
+                    // On unifie tout sous le nom "HEADSET_BUTTON_MAIN"
                     this.triggerCommand('HEADSET_BUTTON_MAIN');
                     return;
-                }
-
-                // D. Autres touches médias (Next/Prev)
-                const validKeys = Object.values(KEY_CODES);
-                if (validKeys.includes(code)) {
-                    this.triggerCommand(`KEY_${code}`);
                 }
             });
         }
     }
 
-    // --- 3. GATEKEEPER ---
+    // --- 3. GATEKEEPER (Filtre Anti-Echo) ---
     public triggerCommand(source: string) {
         const now = Date.now();
-        // Debounce de 300ms pour éviter que le Bluetooth et le KeyEvent ne doublent la commande
+        // Debounce de 300ms.
+        // Si Android envoie à la fois "HOOK" et "MEDIA" en même temps (fréquent),
+        // on ne prend que le premier.
         if (now - this.lastCommandTime < 300) {
             console.log(`[Headset] Ignored duplicate/echo: ${source}`);
             return;
@@ -124,7 +129,7 @@ class HeadsetService {
 
         this.lastCommandTime = now;
         if (this.onCommand) {
-            console.log(`[Headset] Valid Command: ${source}`);
+            console.log(`[Headset] Valid Command Executed: ${source}`);
             this.onCommand(source);
         }
     }
