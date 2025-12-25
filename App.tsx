@@ -1,5 +1,4 @@
-
-import './polyfills'; // Toujours en premier
+import './polyfills'; 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
@@ -26,6 +25,8 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 import PrivacyConsentModal from './components/PrivacyConsentModal';
+// NOUVEAU COMPOSANT
+import OperatorActionModal from './components/OperatorActionModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
 
@@ -37,7 +38,7 @@ const App: React.FC = () => {
     id: '', callsign: '', role: OperatorRole.OPR,
     status: OperatorStatus.CLEAR, isTx: false,
     joinedAt: Date.now(), bat: 100, head: 0,
-    lat: 0, lng: 0 // On met 0 pour détecter qu'on n'a pas encore de fix GPS
+    lat: 0, lng: 0 
   });
 
   const [view, setView] = useState<ViewType>('login');
@@ -66,8 +67,6 @@ const App: React.FC = () => {
 
   const [hasConsent, setHasConsent] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
-  
-  // Nouvel état pour suivre l'initialisation
   const [isServicesReady, setIsServicesReady] = useState(false);
   const [gpsStatus, setGpsStatus] = useState<'WAITING' | 'OK' | 'ERROR'>('WAITING');
 
@@ -76,7 +75,6 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- 1. GESTION RESEAU ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -95,7 +93,6 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  // --- 2. ABONNEMENT AUDIO ---
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           setVoxActive(mode === 'vox');
@@ -103,12 +100,10 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
-  // --- 3. CAPTEURS PASSIFS (Batterie, Compas, Trigramme) ---
   useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
   useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
   useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
   
-  // --- 4. BACK HANDLER ---
   useEffect(() => { const backAction = () => { if (selectedOperatorId) { setSelectedOperatorId(null); return true; } if (showQRModal) { setShowQRModal(false); return true; } if (showScanner) { setShowScanner(false); return true; } if (view === 'ops' || view === 'map') { Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]); return true; } return false; }; const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction); return () => backHandler.remove(); }, [view, user.role, selectedOperatorId, showQRModal, showScanner]);
 
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
@@ -123,7 +118,7 @@ const App: React.FC = () => {
       audioService.setTx(false); setVoxActive(false);
       audioService.updateNotification("Déconnecté");
       setBannedPeers([]);
-      setIsServicesReady(false); // Reset l'état
+      setIsServicesReady(false);
   };
 
   const copyToClipboard = async () => { if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié"); } };
@@ -312,28 +307,24 @@ const App: React.FC = () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  // --- 5. INITIALISATION SERVICES (Audio & GPS) ---
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
     
     console.log("[App] Starting Services Sequence...");
 
     try {
-        // A. AUDIO : On init le micro en premier
         const audioStatus = await Audio.requestPermissionsAsync();
         if (!audioStatus.granted) {
             Alert.alert("Erreur Micro", "L'accès au micro est requis.");
             return;
         }
 
-        // On lance le service Audio (WebRTC + InCallManager)
         const audioInitResult = await audioService.init();
         if (!audioInitResult) {
             showToast("Erreur init audio - Réessayer", "error");
-            return; // On arrête si l'audio a crashé
+            return;
         }
 
-        // Setup du Metering (VU-mètre)
         audioService.startMetering((state) => {
           const isTransmitting = state === 1;
           if (isTransmitting !== user.isTx) {
@@ -346,19 +337,12 @@ const App: React.FC = () => {
           }
         });
         
-        // B. GPS : On gère ça séparément pour ne pas bloquer l'UI
-        // On ne demande la permission que si elle n'est pas déjà là
         const locationStatus = await Location.requestForegroundPermissionsAsync();
         
         if (locationStatus.status === 'granted') {
-            console.log("[App] GPS Permission Granted - Starting Watcher");
-            
-            // On récupère une première position "One Shot" pour éviter le "Paris par défaut"
-            // On utilise getCurrentPositionAsync avec un timeout court pour pas bloquer
             try {
                 const initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
                 if (initialLoc && initialLoc.coords) {
-                    console.log("[App] Initial GPS Fix Found:", initialLoc.coords);
                     setUser(prev => ({
                         ...prev,
                         lat: initialLoc.coords.latitude,
@@ -367,23 +351,18 @@ const App: React.FC = () => {
                     setGpsStatus('OK');
                 }
             } catch (e) {
-                console.warn("[App] Initial GPS fix failed (timeout?), waiting for watcher...");
+                console.warn("[App] Initial GPS fix failed");
             }
 
-            // On lance le tracking continu
             Location.watchPositionAsync(
               { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
               (loc) => {
                 const { latitude, longitude, speed, heading, accuracy } = loc.coords;
-                // Filtrer les positions imprécises (> 50m)
                 if (accuracy && accuracy > 50) return;
-
-                setGpsStatus('OK'); // GPS confirme qu'il est vivant
-                
+                setGpsStatus('OK');
                 setUser(prev => {
                   const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
                   const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
-                  
                   if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
                     broadcast({ type: 'UPDATE', user: newUser });
                     lastLocationRef.current = { lat: latitude, lng: longitude };
@@ -397,15 +376,11 @@ const App: React.FC = () => {
              showToast("GPS Refusé", "error");
         }
 
-        // C. CAMERA (Si besoin)
         if (!permission?.granted) {
-            // On le fait en background, pas critique
             requestPermission();
         }
 
         setIsServicesReady(true);
-        console.log("[App] Services Ready");
-
     } catch (e) {
         console.error("[App] Start Services Error", e);
         showToast("Erreur critique services", "error");
@@ -413,7 +388,6 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-      // On attend le consentement et un trigramme valide avant de lancer la séquence
       if (hasConsent && user.callsign && view !== 'login') {
           startServices();
       }
@@ -444,7 +418,6 @@ const App: React.FC = () => {
     setTimeout(() => joinSession(data), 500);
   };
 
-  // --- RENDERS ---
   const renderLogin = () => (
     <View style={styles.centerContainer}>
       <MaterialIcons name="fingerprint" size={80} color="#3b82f6" style={{opacity: 0.8, marginBottom: 30}} />
@@ -464,7 +437,6 @@ const App: React.FC = () => {
       <View style={styles.menuContainer}>
         <View style={{flexDirection: 'row', justifyContent:'space-between', alignItems:'center', marginBottom: 20}}>
             <Text style={styles.sectionTitle}>DÉPLOIEMENT</Text>
-            {/* INDICATEUR ETAT DES SERVICES */}
             <View style={{flexDirection: 'row', alignItems: 'center', gap: 5}}>
                 {isServicesReady ? (
                     <MaterialIcons name="check-circle" size={16} color="#22c55e" />
@@ -549,7 +521,6 @@ const App: React.FC = () => {
           </ScrollView>
         ) : (
           <View style={{flex: 1}}>
-             {/* AFFICHER LA CARTE UNIQUEMENT SI LE GPS EST OK */}
              {gpsStatus === 'OK' && user.lat !== 0 ? (
                 <TacticalMap 
                   me={user} peers={peers} pings={pings} 
@@ -569,7 +540,6 @@ const App: React.FC = () => {
                 <View style={{flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000'}}>
                     <ActivityIndicator size="large" color="#3b82f6" />
                     <Text style={{color: 'white', marginTop: 20}}>Acquisition signal GPS...</Text>
-                    <Text style={{color: '#71717a', fontSize: 12, marginTop: 5}}>Assurez-vous d'être à ciel ouvert</Text>
                 </View>
              )}
 
@@ -665,45 +635,15 @@ const App: React.FC = () => {
        view === 'menu' ? renderMenu() :
        renderDashboard()}
 
-      {/* MODALES ET TOAST... (Identique à avant) */}
-      <Modal 
-        visible={!!selectedOperatorId} 
-        animationType="fade" 
-        transparent
-        onRequestClose={() => setSelectedOperatorId(null)}
-      >
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedOperatorId(null)}>
-           <View style={[styles.modalContent, { backgroundColor: '#18181b', borderColor: '#333', borderWidth: 1 }]}>
-               
-               <View style={{alignItems: 'center', marginBottom: 20}}>
-                   <Text style={[styles.modalTitle, {color: 'white', marginBottom: 5}]}>ACTION OPÉRATEUR</Text>
-                   <Text style={{color: '#a1a1aa', fontSize: 16, fontWeight: 'bold'}}>
-                       {peers[selectedOperatorId || '']?.callsign || 'Inconnu'}
-                   </Text>
-               </View>
-               
-               <TouchableOpacity 
-                   onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} 
-                   style={[styles.modalBtn, {backgroundColor: '#d946ef', marginBottom: 12, width: '100%'}]}
-               >
-                   <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>APPEL PRIVÉ</Text>
-               </TouchableOpacity>
-               
-               {user.role === OperatorRole.HOST && (
-                   <TouchableOpacity 
-                       onPress={() => selectedOperatorId && handleKickUser(selectedOperatorId)} 
-                       style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 12, width: '100%'}]}
-                   >
-                        <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>BANNIR / KICK</Text>
-                   </TouchableOpacity>
-               )}
-               
-               <TouchableOpacity onPress={() => setSelectedOperatorId(null)} style={{padding: 10, marginTop: 5}}>
-                   <Text style={{color: '#71717a'}}>ANNULER</Text>
-               </TouchableOpacity>
-           </View>
-        </TouchableOpacity>
-      </Modal>
+      {/* --- INTEGRATION PROPRE DU NOUVEAU COMPOSANT --- */}
+      <OperatorActionModal 
+        visible={!!selectedOperatorId}
+        targetOperator={selectedOperatorId ? peers[selectedOperatorId] : null}
+        currentUserRole={user.role}
+        onClose={() => setSelectedOperatorId(null)}
+        onPrivateCall={handleRequestPrivate}
+        onKick={handleKickUser}
+      />
 
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
