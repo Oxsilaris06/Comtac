@@ -23,50 +23,45 @@ class AudioService {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Initializing...");
+      console.log("[Audio] Starting Music Capsule Sequence...");
 
-      // 1. HEADSET SERVICE
+      // 1. D'ABORD : MUSIC CONTROL (Prise de Focus Prioritaire)
+      // On s'assure d'avoir la session média avant tout le reste
+      this.setupMusicControl();
+
+      // 2. ENSUITE : HEADSET SERVICE
       headsetService.setCommandCallback((source) => { 
-          if (source === 'PHYSICAL_PTT_START') {
-              this.setTx(true);
-          } else if (source === 'PHYSICAL_PTT_END') {
-              this.setTx(false);
-          } else {
-              // Toggle VOX/PTT pour les commandes BT
-              this.toggleVox(); 
-          }
+          if (source === 'PHYSICAL_PTT_START') this.setTx(true);
+          else if (source === 'PHYSICAL_PTT_END') this.setTx(false);
+          else this.toggleVox(); 
       });
-      
       headsetService.setConnectionCallback((isConnected, type) => { 
-          this.handleRouteUpdate(isConnected, type); 
+          // On force le routage à chaque changement matériel
+          this.forceAudioRouting(isConnected);
       });
-      
       headsetService.init();
 
-      // 2. CONFIG AUDIO (InCallManager)
+      // 3. ENFIN : INCALL MANAGER (La couche Audio VoIP)
       try {
-          // Mode 'audio' pour VoIP
-          InCallManager.start({ media: 'audio', auto: true, ringback: '' }); 
+          // On démarre l'audio. Attention, cela peut tenter de voler le focus média.
+          // 'video' est parfois moins agressif que 'audio' sur le focus bouton
+          InCallManager.start({ media: 'video', auto: true, ringback: '' }); 
           InCallManager.setKeepScreenOn(true);
           InCallManager.setMicrophoneMute(false);
-          
-          // Routage initial basé sur l'état détecté par headsetService
-          this.handleRouteUpdate(headsetService.isHeadsetConnected, 'Initial');
-      } catch (e) {
-          console.warn("[Audio] InCallManager Error:", e);
-      }
+      } catch (e) { console.warn("InCall Start Error", e); }
 
-      // 3. MICRO
+      // 4. ROUTAGE INITIAL FORCÉ (Le Fix du HP bloqué)
+      // On attend un peu que InCallManager ait fini de démarrer
+      setTimeout(() => {
+          this.forceAudioRouting(headsetService.isHeadsetConnected);
+      }, 1500);
+
+      // 5. MICRO (Avec filtres)
       try {
         const constraints = {
             audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                googEchoCancellation: true,
-                googAutoGainControl: true,
-                googNoiseSuppression: true,
-                googHighpassFilter: true
+                echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+                googEchoCancellation: true, googAutoGainControl: true, googNoiseSuppression: true, googHighpassFilter: true
             },
             video: false
         };
@@ -78,8 +73,6 @@ class AudioService {
         return false;
       }
 
-      // 4. MUSIC CONTROL (UI Lockscreen)
-      this.setupMusicControl();
       this.setupVox();
       this.startKeepAlive();
       
@@ -93,24 +86,24 @@ class AudioService {
     }
   }
 
-  // --- ROUTAGE AUDIO STRICT ---
-  private handleRouteUpdate(isConnected: boolean, type: string) {
-      console.log(`[Audio] Routing Update -> Headset: ${isConnected} (${type})`);
+  // --- ROUTAGE AUDIO EXPLICITE ---
+  private forceAudioRouting(isHeadset: boolean) {
+      console.log(`[Audio] Forcing Route -> Headset: ${isHeadset}`);
       
-      if(isConnected) {
-          // CASQUE : Son dans les oreilles
+      if(isHeadset) {
+          // CASQUE : On désactive TOUS les flags de haut-parleur
           InCallManager.setForceSpeakerphoneOn(false);
-          InCallManager.setSpeakerphoneOn(false);
-          this.updateNotification(`Casque (${type})`);
+          InCallManager.setSpeakerphoneOn(false); 
+          this.updateNotification(`Casque Actif`);
       } else {
-          // PAS DE CASQUE : Son sur haut-parleur (Talkie)
+          // HP : On active TOUS les flags de haut-parleur
           InCallManager.setForceSpeakerphoneOn(true);
           InCallManager.setSpeakerphoneOn(true);
           this.updateNotification(`Haut-Parleur`);
       }
       
-      // Petit délai pour laisser le focus se faire
-      setTimeout(() => this.refreshMediaFocus(), 500);
+      // On rafraîchit MusicControl pour être sûr qu'il reste au premier plan
+      this.refreshMediaFocus();
   }
 
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
@@ -120,12 +113,13 @@ class AudioService {
   }
   private notifyListeners() { this.listeners.forEach(cb => cb(this.mode)); }
 
+  // --- CAPSULE MUSIQUE ---
   private setupMusicControl() {
       if (Platform.OS !== 'android') return;
       try {
           MusicControl.stopControl();
-          // On active le background mode pour les notifs
-          // IMPORTANT: handleAudioInterruptions(true) permet de reprendre la main sur les notifs
+          // CRITIQUE : handleAudioInterruptions(true) permet à MusicControl de se battre
+          // pour garder le focus même si InCallManager essaie de le prendre.
           MusicControl.enableBackgroundMode(true);
           MusicControl.handleAudioInterruptions(true); 
           
@@ -134,7 +128,7 @@ class AudioService {
           MusicControl.enableControl('togglePlayPause', true);
           MusicControl.enableControl('closeNotification', false, { when: 'never' });
           
-          // Les clics sur la notif passent par HeadsetService (pour le debounce)
+          // Redirection vers HeadsetService
           const trigger = () => headsetService.triggerCommand('MEDIA_UI_EVENT');
           
           MusicControl.on(Command.play, trigger);
@@ -147,29 +141,23 @@ class AudioService {
 
   private refreshMediaFocus() {
       if (Platform.OS === 'android') {
-          MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING, elapsedTime: 0 });
+          // On spamme gentiment le système pour dire "Je suis toujours là"
+          MusicControl.updatePlayback({ 
+              state: MusicControl.STATE_PLAYING, 
+              elapsedTime: 0 
+          });
       }
   }
 
   toggleVox() {
-    // Si on utilise le PTT Physique, on ignore le toggle
     if (this.isTx && this.mode === 'ptt') return;
 
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // Feedback Sonore & Tactile (Demandé par l'utilisateur)
-    Vibration.vibrate(100); 
-    // Petit bip système pour confirmer dans l'oreille
+    // FEEDBACK SONORE (Bip dans l'oreille)
     try {
-        if (this.mode === 'vox') {
-            // Son montant (Activation)
-            InCallManager.startRingtone('_BUNDLE_', [100]); 
-            setTimeout(() => InCallManager.stopRingtone(), 200);
-        } else {
-            // Son descendant (Désactivation)
-            InCallManager.startRingtone('_BUNDLE_', [100]); 
-            setTimeout(() => InCallManager.stopRingtone(), 200);
-        }
+        InCallManager.startRingtone('_BUNDLE_', [150]); 
+        setTimeout(() => InCallManager.stopRingtone(), 200);
     } catch (e) {}
 
     if (this.mode === 'ptt') {
@@ -211,17 +199,14 @@ class AudioService {
 
   private startKeepAlive() {
       if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
-      this.keepAliveTimer = setInterval(() => { this.refreshMediaFocus(); }, 15000);
+      // Intervalle plus agressif (10s) pour maintenir la capsule Music active
+      this.keepAliveTimer = setInterval(() => { this.refreshMediaFocus(); }, 10000);
   }
 
   setTx(state: boolean) {
     if (this.isTx === state) return;
     this.isTx = state;
-    
-    if (this.stream) {
-        this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
-    }
-    
+    if (this.stream) this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     if(this.mode === 'vox') this.updateNotification();
   }
   
