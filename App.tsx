@@ -25,11 +25,11 @@ import InCallManager from 'react-native-incall-manager';
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData, AppSettings, DEFAULT_SETTINGS } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
-import { configService } from './services/configService'; // Nouveau
+import { configService } from './services/configService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 import PrivacyConsentModal from './components/PrivacyConsentModal';
-import SettingsView from './components/SettingsView'; // Nouveau
+import SettingsView from './components/SettingsView';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
 
@@ -62,6 +62,8 @@ const App: React.FC = () => {
   const [mapMode, setMapMode] = useState<'dark' | 'light' | 'satellite'>('dark');
   const [showTrails, setShowTrails] = useState(true);
   const [showPings, setShowPings] = useState(true);
+  
+  // État VOX géré par abonnement
   const [voxActive, setVoxActive] = useState(false);
   
   const [showQRModal, setShowQRModal] = useState(false);
@@ -93,19 +95,16 @@ const App: React.FC = () => {
       return unsub;
   }, []);
 
-  // --- APPLICATION DES REGLAGES EN TEMPS REEL ---
+  // --- APPLICATION DES REGLAGES ---
   const applySettings = (s: AppSettings) => {
       // 1. Audio Output
       if (s.audioOutput === 'hp') InCallManager.setForceSpeakerphoneOn(true);
       else if (s.audioOutput === 'casque') InCallManager.setForceSpeakerphoneOn(false);
       
-      // 2. GPS Interval (Si le service tourne déjà, on le redémarre)
+      // 2. GPS Interval
       if (gpsSubscription.current) {
           startGpsTracking(s.gpsUpdateInterval);
       }
-      
-      // 3. PTT Key est utilisé par audioService/headsetService (il faudrait idéalement passer la config au service)
-      // Pour simplifier ici, headsetService écoute tout, mais on pourrait filtrer là-bas.
   };
 
   // --- 1. GESTION RESEAU ---
@@ -127,9 +126,12 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  // --- 2. ABONNEMENT AUDIO ---
+  // --- 2. ABONNEMENT AUDIO (CORRECTIF VOX) ---
   useEffect(() => {
+      // Le composant s'abonne aux changements d'état du service
+      // C'est la SEULE source de vérité pour l'affichage du bouton VOX
       const unsubscribe = audioService.subscribe((mode) => {
+          console.log("[App] VOX State Update:", mode);
           setVoxActive(mode === 'vox');
       });
       return unsubscribe;
@@ -163,7 +165,8 @@ const App: React.FC = () => {
       audioService.stopSession();
       if (gpsSubscription.current) { gpsSubscription.current.remove(); gpsSubscription.current = null; }
       
-      audioService.setTx(false); setVoxActive(false);
+      audioService.setTx(false); 
+      // Note: voxActive sera mis à jour par le listener audioService.subscribe
       setBannedPeers([]);
       setIsServicesReady(false); 
   };
@@ -451,7 +454,6 @@ const App: React.FC = () => {
                 }
             } catch (e) { console.warn("[App] Initial GPS fix failed"); }
 
-            // Démarrage GPS avec intervalle configuré
             startGpsTracking(settings.gpsUpdateInterval);
             
         } else {
@@ -625,7 +627,6 @@ const App: React.FC = () => {
                   me={user} peers={peers} pings={pings} 
                   mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
                   showPings={showPings} isHost={user.role === OperatorRole.HOST}
-                  // On passe la couleur perso ici
                   userArrowColor={settings.userArrowColor} 
                   onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
                   onPingMove={(p) => { 
@@ -695,7 +696,10 @@ const App: React.FC = () => {
             ))}
         </View>
         <View style={styles.controlsRow}>
-            <TouchableOpacity onPress={() => { const newVox = audioService.toggleVox(); setVoxActive(newVox); }} style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}>
+            <TouchableOpacity 
+                onPress={() => audioService.toggleVox()} // CORRECTION: Appel direct
+                style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}
+            >
                 <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
             </TouchableOpacity>
             <TouchableOpacity 
@@ -735,10 +739,10 @@ const App: React.FC = () => {
 
       {view === 'login' ? renderLogin() :
        view === 'menu' ? renderMenu() :
-       view === 'settings' ? <SettingsView onClose={() => setView('menu')} /> : // NOUVELLE VUE
+       view === 'settings' ? <SettingsView onClose={() => setView('menu')} /> :
        renderDashboard()}
 
-      {/* ... MODALES EXISTANTES (QR, Scanner, Ping, Actions) INCHANGÉES ... */}
+      {/* ... MODALES ... */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
