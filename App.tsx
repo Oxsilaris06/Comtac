@@ -63,7 +63,6 @@ const App: React.FC = () => {
   const [showTrails, setShowTrails] = useState(true);
   const [showPings, setShowPings] = useState(true);
   
-  // État VOX géré par abonnement
   const [voxActive, setVoxActive] = useState(false);
   
   const [showQRModal, setShowQRModal] = useState(false);
@@ -95,13 +94,10 @@ const App: React.FC = () => {
       return unsub;
   }, []);
 
-  // --- APPLICATION DES REGLAGES ---
   const applySettings = (s: AppSettings) => {
-      // 1. Audio Output
       if (s.audioOutput === 'hp') InCallManager.setForceSpeakerphoneOn(true);
       else if (s.audioOutput === 'casque') InCallManager.setForceSpeakerphoneOn(false);
       
-      // 2. GPS Interval
       if (gpsSubscription.current) {
           startGpsTracking(s.gpsUpdateInterval);
       }
@@ -126,10 +122,8 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  // --- 2. ABONNEMENT AUDIO (CORRECTIF VOX) ---
+  // --- 2. ABONNEMENT AUDIO ---
   useEffect(() => {
-      // Le composant s'abonne aux changements d'état du service
-      // C'est la SEULE source de vérité pour l'affichage du bouton VOX
       const unsubscribe = audioService.subscribe((mode) => {
           console.log("[App] VOX State Update:", mode);
           setVoxActive(mode === 'vox');
@@ -166,7 +160,6 @@ const App: React.FC = () => {
       if (gpsSubscription.current) { gpsSubscription.current.remove(); gpsSubscription.current = null; }
       
       audioService.setTx(false); 
-      // Note: voxActive sera mis à jour par le listener audioService.subscribe
       setBannedPeers([]);
       setIsServicesReady(false); 
   };
@@ -354,6 +347,7 @@ const App: React.FC = () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
+  // --- GESTION PERMISSIONS (AJOUT CALL_PHONE) ---
   const checkAllPermissions = async () => {
       if (Platform.OS === 'android') {
         try {
@@ -361,6 +355,8 @@ const App: React.FC = () => {
                 PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
                 PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
                 PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+                PermissionsAndroid.PERMISSIONS.CALL_PHONE, // AJOUT CRITIQUE
+                PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE, // AJOUT CRITIQUE
             ];
 
             if (Platform.Version >= 33) {
@@ -524,7 +520,6 @@ const App: React.FC = () => {
   const renderMenu = () => (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.menuContainer}>
-        {/* BOUTON SETTINGS EN HAUT À DROITE */}
         <View style={{flexDirection: 'row', justifyContent:'space-between', alignItems:'center', marginBottom: 20}}>
             <Text style={styles.sectionTitle}>DÉPLOIEMENT</Text>
             <View style={{flexDirection: 'row', gap: 15}}>
@@ -537,7 +532,6 @@ const App: React.FC = () => {
             </View>
         </View>
 
-        {/* STATUS BAR (GPS, Services) */}
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 20, backgroundColor: '#18181b', padding: 10, borderRadius: 8}}>
                 {isServicesReady ? (
                     <MaterialIcons name="check-circle" size={16} color="#22c55e" />
@@ -697,7 +691,7 @@ const App: React.FC = () => {
         </View>
         <View style={styles.controlsRow}>
             <TouchableOpacity 
-                onPress={() => audioService.toggleVox()} // CORRECTION: Appel direct
+                onPress={() => audioService.toggleVox()}
                 style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}
             >
                 <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
@@ -742,7 +736,6 @@ const App: React.FC = () => {
        view === 'settings' ? <SettingsView onClose={() => setView('menu')} /> :
        renderDashboard()}
 
-      {/* ... MODALES ... */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
