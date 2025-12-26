@@ -1,5 +1,4 @@
-// 1. LES POLYFILLS EN TOUT PREMIER (Avant tout autre import)
-import './polyfills';
+import './polyfills'; // DOIT ÊTRE LA LIGNE 1 ABSOLUE
 
 import { registerRootComponent } from 'expo';
 import App from './App';
