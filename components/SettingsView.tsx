@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, ScrollView, 
-  TextInput, Alert, Modal 
+  TextInput, Alert, Modal, Platform, StatusBar 
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { AppSettings, DEFAULT_SETTINGS } from '../types';
@@ -42,12 +42,13 @@ const SettingsView: React.FC<Props> = ({ onClose }) => {
 
   return (
     <View style={styles.container}>
+      {/* Header adapté à la StatusBar */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
             <MaterialIcons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.title}>PARAMÈTRES TACTIQUES</Text>
-        <View style={{width: 24}} />
+        <View style={{width: 24}} /> 
       </View>
 
       <ScrollView style={styles.content}>
@@ -163,7 +164,18 @@ const SettingsView: React.FC<Props> = ({ onClose }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#27272a', backgroundColor: '#09090b' },
+  header: { 
+      flexDirection: 'row', 
+      alignItems: 'center', 
+      justifyContent: 'space-between', 
+      paddingHorizontal: 16,
+      paddingBottom: 16,
+      // CORRECTION : Padding dynamique pour éviter la StatusBar
+      paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 60, 
+      borderBottomWidth: 1, 
+      borderBottomColor: '#27272a', 
+      backgroundColor: '#09090b' 
+  },
   closeBtn: { padding: 8 },
   title: { color: 'white', fontWeight: 'bold', fontSize: 16, letterSpacing: 1 },
   content: { padding: 20 },
