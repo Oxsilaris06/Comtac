@@ -1,10 +1,9 @@
-
 import './polyfills'; // Toujours en premier
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
   SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView, ActivityIndicator,
-  PermissionsAndroid // AJOUT IMPORT
+  PermissionsAndroid // AJOUT
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
@@ -311,6 +310,48 @@ const App: React.FC = () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
+  // --- NOUVELLE FONCTION DE PERMISSIONS GROUPÉES ---
+  const checkAllPermissions = async () => {
+      if (Platform.OS === 'android') {
+        try {
+            // 1. Définir la liste COMPLETE des permissions à demander
+            const permsToRequest = [
+                PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+                PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+                PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+            ];
+
+            // 2. Android 13+ : Notifications
+            if (Platform.Version >= 33) {
+                permsToRequest.push(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+            }
+
+            // 3. Android 12+ : Bluetooth Connect/Scan (Pour les casques sans Loc)
+            if (Platform.Version >= 31) {
+                permsToRequest.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+                permsToRequest.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
+            }
+
+            // 4. Activité Physique (Souvent demandé pour l'économie d'énergie GPS)
+            // Note: ACTIVITY_RECOGNITION est runtime permission depuis API 29 (Android 10)
+            if (Platform.Version >= 29) {
+                permsToRequest.push(PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION);
+            }
+
+            // DEMANDE GROUPÉE
+            const results = await PermissionsAndroid.requestMultiple(permsToRequest);
+            console.log('[Permissions] Results:', results);
+            
+            // Vérification basique (On n'empêche pas l'app de se lancer si refusé, mais on log)
+            if (results[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] !== PermissionsAndroid.RESULTS.GRANTED) {
+                showToast("Microphone refusé - Audio inactif", "error");
+            }
+        } catch (err) {
+            console.warn("[Permissions] Error requesting multiple permissions", err);
+        }
+      }
+  };
+
   // --- 5. INITIALISATION SERVICES (Audio & GPS) ---
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
@@ -318,24 +359,10 @@ const App: React.FC = () => {
     console.log("[App] Starting Services Sequence...");
 
     try {
-        // A. PERMISSIONS NOTIFICATIONS (Android 13+) - CRITIQUE POUR BLUETOOTH
-        if (Platform.OS === 'android' && Platform.Version >= 33) {
-            const granted = await PermissionsAndroid.request(
-              PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
-            );
-            if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-               console.warn("[App] Notification Permission Denied");
-               // On ne bloque pas mais on prévient que ça risque de mal marcher
-               showToast("Notifications requises pour le casque", "info");
-            }
-        }
+        // A. DEMANDE DE TOUTES LES PERMISSIONS AU DÉBUT
+        await checkAllPermissions();
 
-        const audioStatus = await Audio.requestPermissionsAsync();
-        if (!audioStatus.granted) {
-            Alert.alert("Erreur Micro", "L'accès au micro est requis.");
-            return;
-        }
-
+        // B. INIT AUDIO (Maintenant qu'on a les perms)
         const audioInitResult = await audioService.init();
         if (!audioInitResult) {
             showToast("Erreur init audio - Réessayer", "error");
@@ -354,9 +381,10 @@ const App: React.FC = () => {
           }
         });
         
-        const locationStatus = await Location.requestForegroundPermissionsAsync();
+        // C. INIT GPS (Permissions déjà demandées plus haut, on check juste Expo)
+        const locationStatus = await Location.getForegroundPermissionsAsync();
         
-        if (locationStatus.status === 'granted') {
+        if (locationStatus.granted) {
             try {
                 const initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
                 if (initialLoc && initialLoc.coords) {
@@ -390,8 +418,9 @@ const App: React.FC = () => {
               }
             );
         } else {
+             // Si Expo Location n'a pas la perm (cas rare si PermissionsAndroid l'a eue)
              setGpsStatus('ERROR');
-             showToast("GPS Refusé", "error");
+             showToast("GPS non disponible", "error");
         }
 
         if (!permission?.granted) { requestPermission(); }
@@ -406,6 +435,7 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+      // Déclenche l'init seulement après consentement GDPR et connexion trigramme
       if (hasConsent && user.callsign && view !== 'login') {
           startServices();
       }
