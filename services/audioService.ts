@@ -6,19 +6,16 @@ import uuid from 'react-native-uuid';
 import { VolumeManager } from 'react-native-volume-manager';
 import InCallManager from 'react-native-incall-manager';
 import { headsetService } from './headsetService';
-import MusicControl from 'react-native-music-control'; // AJOUT
+import MusicControl from 'react-native-music-control';
 
 class AudioService {
   stream: MediaStream | null = null;
   isTx: boolean = false;
   mode: 'ptt' | 'vox' = 'ptt';
-  
   currentCallId: string | null = null;
-  
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
-  
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
   private isInitialized = false;
 
@@ -27,14 +24,11 @@ class AudioService {
 
     try {
       console.log("[Audio] Initializing...");
-
-      // 1. Setup CallKeep (Audio/Mic)
       this.setupCallKeep();
 
-      // 2. Setup Headset (MusicControl / Buttons)
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Cmd:", source);
-          this.enforceAudioRoute(); // Sécurité
+          this.enforceAudioRoute(); 
           this.toggleVox(); 
       });
       headsetService.setConnectionCallback((isConnected, type) => { 
@@ -42,14 +36,12 @@ class AudioService {
       });
       headsetService.init();
 
-      // 3. Audio Config
       try {
           InCallManager.start({ media: 'audio' }); 
           InCallManager.setKeepScreenOn(true);
           this.enforceAudioRoute();
       } catch (e) { console.warn("InCallManager error", e); }
 
-      // 4. Micro
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
@@ -97,8 +89,6 @@ class AudioService {
         RNCallKeep.setup(options).then(accepted => RNCallKeep.setAvailable(true));
         RNCallKeep.addEventListener('endCall', () => this.stopSession());
         RNCallKeep.addEventListener('answerCall', () => {}); 
-        
-        // Ecouteurs CallKeep (Backup)
         RNCallKeep.addEventListener('didPerformSetMutedCallAction', () => {
             if (this.currentCallId) RNCallKeep.setMutedCall(this.currentCallId, false);
             this.toggleVox();
@@ -107,7 +97,6 @@ class AudioService {
              if (this.currentCallId) RNCallKeep.setOnHold(this.currentCallId, false);
             this.toggleVox();
         });
-        
       } catch (err) {}
   }
 
@@ -123,8 +112,7 @@ class AudioService {
       this.enforceAudioRoute();
       this.updateNotification();
       
-      // RE-FORCE MUSIC CONTROL PLAYING STATE
-      // C'est l'astuce pour récupérer les boutons si CallKeep les a volés
+      // RELANCE AGRESSIVE MUSIC CONTROL
       MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
   }
 
@@ -169,7 +157,6 @@ class AudioService {
       const statusText = isVox ? `VOX ON ${this.isTx ? '(TX)' : ''}` : 'PTT (Appuyez)';
       RNCallKeep.updateDisplay(this.currentCallId, `ComTac: ${statusText}`, 'Radio Tactique');
       
-      // Update Music Control Notification too
       MusicControl.updatePlayback({
           state: MusicControl.STATE_PLAYING,
           title: `ComTac: ${statusText}`
