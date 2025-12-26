@@ -66,7 +66,10 @@ const App: React.FC = () => {
 
   const [hasConsent, setHasConsent] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  
+  // États de chargement
   const [isServicesReady, setIsServicesReady] = useState(false);
+  const [loadingStep, setLoadingStep] = useState<string>('');
   const [gpsStatus, setGpsStatus] = useState<'WAITING' | 'OK' | 'ERROR'>('WAITING');
 
   const peerRef = useRef<Peer | null>(null);
@@ -74,6 +77,133 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  // --- 1. SÉQUENCE DE DÉMARRAGE BLINDÉE ---
+  const startServices = async () => {
+    if (!hasConsent || isServicesReady) return;
+    
+    console.log("[App] Lancement séquence initialisation...");
+    
+    try {
+        // ÉTAPE 1 : Permissions Android 13+ (Notifications & Bluetooth)
+        // C'est CRITIQUE de le faire AVANT de toucher à CallKeep ou l'Audio
+        if (Platform.OS === 'android') {
+            setLoadingStep('Permissions Système...');
+            
+            // Android 13 (SDK 33) : Notifications requises pour Foreground Service
+            if (Platform.Version >= 33) {
+                const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+                if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                    Alert.alert("Attention", "Sans notifications, l'application risque de s'arrêter en arrière-plan.");
+                }
+            }
+
+            // Android 12 (SDK 31) : Bluetooth Connect requis pour Headset
+            if (Platform.Version >= 31) {
+                await PermissionsAndroid.requestMultiple([
+                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN
+                ]);
+            }
+        }
+
+        // ÉTAPE 2 : Permission Micro (Bloquant pour WebRTC)
+        setLoadingStep('Accès Micro...');
+        const audioStatus = await Audio.requestPermissionsAsync();
+        if (!audioStatus.granted) {
+            Alert.alert("Erreur Fatale", "L'accès au micro est requis pour la radio.");
+            return;
+        }
+
+        // ÉTAPE 3 : Initialisation des Services Audio & CallKeep
+        // Maintenant qu'on a les permissions, on peut lancer les services sans crash
+        setLoadingStep('Démarrage Radio...');
+        const audioInitResult = await audioService.init();
+        if (!audioInitResult) {
+            showToast("Erreur init audio - Réessayer", "error");
+            return;
+        }
+
+        // Setup du VU-mètre
+        audioService.startMetering((state) => {
+          const isTransmitting = state === 1;
+          if (isTransmitting !== user.isTx) {
+             if (silenceMode && user.role !== OperatorRole.HOST) return;
+             setUser(prev => {
+                const u = { ...prev, isTx: isTransmitting };
+                broadcast({ type: 'UPDATE', user: u });
+                return u;
+             });
+          }
+        });
+        
+        // ÉTAPE 4 : GPS (Non Bloquant)
+        // On demande la permission GPS à la fin pour ne pas ralentir le boot audio
+        setLoadingStep('Géolocalisation...');
+        const locationStatus = await Location.requestForegroundPermissionsAsync();
+        
+        if (locationStatus.status === 'granted') {
+            // Essai de position immédiate (rapide)
+            try {
+                const initialLoc = await Location.getLastKnownPositionAsync();
+                if (initialLoc) {
+                    setUser(prev => ({
+                        ...prev,
+                        lat: initialLoc.coords.latitude,
+                        lng: initialLoc.coords.longitude
+                    }));
+                    setGpsStatus('OK');
+                }
+            } catch (e) {}
+
+            // Tracking continu
+            Location.watchPositionAsync(
+              { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
+              (loc) => {
+                const { latitude, longitude, speed, heading, accuracy } = loc.coords;
+                if (accuracy && accuracy > 50) return;
+                setGpsStatus('OK');
+                setUser(prev => {
+                  const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
+                  const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
+                  
+                  if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
+                    broadcast({ type: 'UPDATE', user: newUser });
+                    lastLocationRef.current = { lat: latitude, lng: longitude };
+                  }
+                  return newUser;
+                });
+              }
+            );
+        } else {
+             setGpsStatus('ERROR');
+             showToast("GPS Refusé - Carte désactivée", "error");
+        }
+
+        // ÉTAPE 5 : Caméra (Optionnel, en fond)
+        if (!permission?.granted) {
+            requestPermission();
+        }
+
+        setIsServicesReady(true);
+        setLoadingStep('');
+        console.log("[App] Services Ready");
+
+    } catch (e) {
+        console.error("[App] Start Services Error", e);
+        showToast("Erreur critique services", "error");
+        setLoadingStep('Erreur Init');
+    }
+  };
+
+  useEffect(() => {
+      // Trigger : Consentement + Trigramme + Vue Menu
+      if (hasConsent && user.callsign && view !== 'login') {
+          startServices();
+      }
+  }, [hasConsent, view]); 
+
+  // --- REST OF THE LOGIC ---
+  
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -306,104 +436,12 @@ const App: React.FC = () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  const startServices = async () => {
-    if (!hasConsent || isServicesReady) return;
-    
-    console.log("[App] Starting Services Sequence...");
-
-    try {
-        // PERMISSIONS CRITIQUES ANDROID 13+
-        if (Platform.OS === 'android' && Platform.Version >= 33) {
-            await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-        }
-
-        const audioStatus = await Audio.requestPermissionsAsync();
-        if (!audioStatus.granted) {
-            Alert.alert("Erreur Micro", "L'accès au micro est requis.");
-            return;
-        }
-
-        const audioInitResult = await audioService.init();
-        if (!audioInitResult) {
-            showToast("Erreur init audio - Réessayer", "error");
-            return;
-        }
-
-        audioService.startMetering((state) => {
-          const isTransmitting = state === 1;
-          if (isTransmitting !== user.isTx) {
-             if (silenceMode && user.role !== OperatorRole.HOST) return;
-             setUser(prev => {
-                const u = { ...prev, isTx: isTransmitting };
-                broadcast({ type: 'UPDATE', user: u });
-                return u;
-             });
-          }
-        });
-        
-        const locationStatus = await Location.requestForegroundPermissionsAsync();
-        
-        if (locationStatus.status === 'granted') {
-            try {
-                const initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-                if (initialLoc && initialLoc.coords) {
-                    setUser(prev => ({
-                        ...prev,
-                        lat: initialLoc.coords.latitude,
-                        lng: initialLoc.coords.longitude
-                    }));
-                    setGpsStatus('OK');
-                }
-            } catch (e) {
-                console.warn("[App] Initial GPS fix failed");
-            }
-
-            Location.watchPositionAsync(
-              { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
-              (loc) => {
-                const { latitude, longitude, speed, heading, accuracy } = loc.coords;
-                if (accuracy && accuracy > 50) return;
-                setGpsStatus('OK');
-                setUser(prev => {
-                  const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
-                  const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
-                  if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
-                    broadcast({ type: 'UPDATE', user: newUser });
-                    lastLocationRef.current = { lat: latitude, lng: longitude };
-                  }
-                  return newUser;
-                });
-              }
-            );
-        } else {
-             setGpsStatus('ERROR');
-             showToast("GPS Refusé", "error");
-        }
-
-        if (!permission?.granted) {
-            requestPermission();
-        }
-
-        setIsServicesReady(true);
-    } catch (e) {
-        console.error("[App] Start Services Error", e);
-        showToast("Erreur critique services", "error");
-    }
-  };
-
-  useEffect(() => {
-      if (hasConsent && user.callsign && view !== 'login') {
-          startServices();
-      }
-  }, [hasConsent, view]); 
-
   const handleLogin = async () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
-    
     setUser(prev => ({ ...prev, callsign: tri }));
-    setView('menu');
+    setView('menu'); // Déclenchera useEffect -> startServices
   };
 
   const joinSession = (id?: string) => {
@@ -476,9 +514,9 @@ const App: React.FC = () => {
             <Text style={styles.joinBtnText}>REJOINDRE</Text>
         </TouchableOpacity>
         
-        {!isServicesReady && (
+        {loadingStep !== '' && !isServicesReady && (
             <Text style={{color: '#eab308', textAlign: 'center', marginTop: 20, fontSize: 12}}>
-                Initialisation des systèmes...
+                {loadingStep}
             </Text>
         )}
       </View>
@@ -566,6 +604,7 @@ const App: React.FC = () => {
       </View>
 
       <View style={styles.footer}>
+        {/* Footer controls identique à avant */}
         <View style={styles.statusRow}>
             {user.role === OperatorRole.HOST ? (
                <TouchableOpacity 
@@ -627,17 +666,6 @@ const App: React.FC = () => {
             </TouchableOpacity>
         </View>
       </View>
-    </View>
-  );
-
-  return (
-    <View style={styles.container}>
-      <StatusBar style="light" backgroundColor="#000" />
-      <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
-
-      {view === 'login' ? renderLogin() :
-       view === 'menu' ? renderMenu() :
-       renderDashboard()}
 
       <OperatorActionModal 
         visible={!!selectedOperatorId}
@@ -648,6 +676,7 @@ const App: React.FC = () => {
         onKick={handleKickUser}
       />
 
+      {/* AUTRES MODALES... (QR, Scanner, Ping, Toast) */}
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
