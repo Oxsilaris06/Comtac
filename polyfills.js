@@ -1,13 +1,13 @@
-
 import 'react-native-get-random-values';
-import { registerGlobals } from 'react-native-webrtc';
+// On sécurise l'import WebRTC au cas où le module natif n'est pas lié
+try {
+    const { registerGlobals } = require('react-native-webrtc');
+    registerGlobals();
+} catch (e) {
+    console.warn("WebRTC native module not found, some features may crash.");
+}
 
-// 1. Activation WebRTC
-registerGlobals();
-
-// 2. Simulation Environnement Navigateur COMPLET pour Hermes
-
-// A. Self & Window (CRITIQUE : Le fix pour l'erreur "Property 'S'")
+// 1. GLOBAL & WINDOW
 if (typeof window === 'undefined') {
     global.window = global;
 }
@@ -15,7 +15,7 @@ if (typeof self === 'undefined') {
     global.self = global;
 }
 
-// B. Process (Manquant dans Hermes)
+// 2. PROCESS
 if (typeof process === 'undefined') {
     global.process = {
         env: { NODE_ENV: __DEV__ ? 'development' : 'production' },
@@ -24,7 +24,7 @@ if (typeof process === 'undefined') {
     };
 }
 
-// C. Location (Requis par PeerJS)
+// 3. LOCATION (PeerJS)
 if (!global.window.location) {
     global.window.location = {
         protocol: 'https:',
@@ -38,7 +38,7 @@ if (!global.window.location) {
     };
 }
 
-// D. Navigator
+// 4. NAVIGATOR
 if (!global.navigator) {
     global.navigator = {};
 }
@@ -49,13 +49,13 @@ if (global.navigator.onLine === undefined) {
     global.navigator.onLine = true;
 }
 
-// E. Timers
+// 5. TIMERS
 const originalSetTimeout = setTimeout;
 global.setTimeout = (fn, ms, ...args) => {
     return originalSetTimeout(fn, ms || 0, ...args);
 };
 
-// F. TextEncoder (CRITIQUE pour PeerJS + Hermes)
+// 6. TEXT ENCODER (Critique PeerJS)
 if (typeof TextEncoder === 'undefined') {
     global.TextEncoder = class TextEncoder {
         encode(str) {
@@ -77,7 +77,7 @@ if (typeof TextDecoder === 'undefined') {
     };
 }
 
-// G. Crypto Fallback (Sécurité ultime anti-crash)
+// 7. CRYPTO FALLBACK (Critique UUID)
 if (typeof crypto === 'undefined') {
     global.crypto = {
         getRandomValues: (arr) => {
