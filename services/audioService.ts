@@ -111,8 +111,7 @@ class AudioService {
         RNCallKeep.addEventListener('answerCall', () => {}); 
         
         // --- AJOUT CRITIQUE POUR BLUETOOTH ---
-        // Certains casques envoient "Mute" ou "Hold" au lieu de KeyEvents classiques
-        // quand on est en mode "Appel". On les mappe sur le Toggle PTT/VOX.
+        // Intercepte les commandes "Mute" ou "Hold" du casque pour PTT
         RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted }) => {
             this.toggleVox();
         });
@@ -121,10 +120,6 @@ class AudioService {
             this.toggleVox();
         });
         
-        // Intercepte le bouton "Raccrocher" du casque pour ne pas couper la comm
-        // mais plutôt basculer le mode (Optionnel, selon préférence)
-        // RNCallKeep.addEventListener('endCall', ... est déjà géré plus haut pour quitter
-
       } catch (err) {
         console.error('[CallKeep] Setup Error:', err);
       }
