@@ -117,7 +117,7 @@ function withCallKeepManifestFix(config) {
   });
 }
 
-// --- INJECTION KEYEVENT (BROADCAST RECEIVER) ---
+// --- INJECTION KEYEVENT (Standard) ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -151,8 +151,7 @@ function withMainActivityInjection(config) {
     }
   }
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-    // On laisse passer l'event au système pour MusicControl
-    // SAUF si c'est géré par KeyModule, mais ici on veut que MusicControl (MediaSession) le chope aussi
+    // IMPORTANT: On ne retourne PAS true ici pour laisser passer les events Media à MusicControl
     if (event.action == KeyEvent.ACTION_DOWN) {
        if (KeyEventModule.getInstance() != null) {
            KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
@@ -181,8 +180,7 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- SERVICE ACCESSIBILITÉ ---
-// On le garde car c'est le filet de sécurité ultime si MusicControl est tué
+// --- SERVICE ACCESSIBILITÉ (BACKUP) ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -228,7 +226,6 @@ public class ComTacAccessibilityService extends AccessibilityService {
         int action = event.getAction();
         int keyCode = event.getKeyCode();
         if (action == KeyEvent.ACTION_DOWN) {
-            // Liste large pour tout capturer
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
                 keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
@@ -241,11 +238,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
-                
-                // IMPORTANT: On ne retourne PAS true ici pour le moment,
-                // On laisse MusicControl gérer la consommation de l'event Media
-                // Sauf pour Vol Up
-                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) return false; 
+                // On laisse passer pour MusicControl
                 return false; 
             }
         }
