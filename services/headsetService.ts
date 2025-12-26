@@ -1,4 +1,4 @@
-import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription, DeviceEventEmitter } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 
 const KEY_CODES = {
@@ -26,12 +26,14 @@ class HeadsetService {
     public isHeadsetConnected: boolean = false;
     private eventEmitter: NativeEventEmitter | null = null;
     private subscription: EmitterSubscription | null = null;
+    private mediaSubscription: EmitterSubscription | null = null;
 
     constructor() {}
 
     public init() {
         this.cleanup();
-        this.setupKeyEventListener();
+        this.setupKeyEventListener(); // Via Accessibility Service
+        this.setupMediaSessionListener(); // Via Native Media Module
         this.setupConnectionListener();
     }
 
@@ -40,12 +42,16 @@ class HeadsetService {
             this.subscription.remove();
             this.subscription = null;
         }
+        if (this.mediaSubscription) {
+            this.mediaSubscription.remove();
+            this.mediaSubscription = null;
+        }
+        KeyEvent.removeKeyDownListener();
     }
 
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
     public setConnectionCallback(callback: ConnectionCallback) { this.onConnectionChange = callback; }
 
-    // --- 1. DÉTECTION AUDIO ---
     private setupConnectionListener() {
         if (NativeModules.InCallManager) {
             this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
@@ -58,12 +64,8 @@ class HeadsetService {
                 if (!deviceObj) return;
 
                 const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
-                
-                // On détecte explicitement tout ce qui n'est pas le HP ou le téléphone
                 const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece', 'Headset', 'CarAudio', 'USB_HEADSET', 'AuxLine'];
                 const connected = headsetTypes.some(t => current.includes(t)) && current !== 'Speaker' && current !== 'Phone';
-
-                console.log("[HeadsetService] Device changed:", current, "Connected:", connected);
 
                 this.isHeadsetConnected = connected;
                 if (this.onConnectionChange) this.onConnectionChange(connected, current);
@@ -71,39 +73,49 @@ class HeadsetService {
         }
     }
 
-    // --- 2. BOUTONS PHYSIQUES ---
+    // --- ECOUTEUR 1 : MediaSession Natif (Nouveau) ---
+    private setupMediaSessionListener() {
+        this.mediaSubscription = DeviceEventEmitter.addListener('COMTAC_MEDIA_EVENT', (keyCode: number) => {
+            console.log("[Headset] Media Event received:", keyCode);
+            this.processKeyCode(keyCode, 'MEDIA_SESSION');
+        });
+    }
+
+    // --- ECOUTEUR 2 : Accessibility Service (Ancien) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                // On ignore Vol Down
-                if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
-
-                // Double Volume Up Logic
-                if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
-                    const now = Date.now();
-                    if (now - this.lastVolumeUpTime < 400) {
-                        this.triggerCommand('DOUBLE_VOL_UP');
-                        this.lastVolumeUpTime = 0;
-                    } else {
-                        this.lastVolumeUpTime = now;
-                    }
-                    return;
-                }
-
-                // Pour toutes les autres touches (Mute, Play, Next...)
-                // Comme on retourne TRUE dans le Java, l'action par défaut (changer piste) est annulée
-                // et on arrive ici.
-                const validKeys = Object.values(KEY_CODES);
-                if (validKeys.includes(keyEvent.keyCode)) {
-                    this.triggerCommand(`KEY_${keyEvent.keyCode}`);
-                }
+                this.processKeyCode(keyEvent.keyCode, 'ACCESSIBILITY');
             });
+        }
+    }
+
+    private processKeyCode(keyCode: number, sourceName: string) {
+        // On ignore Vol Down
+        if (keyCode === KEY_CODES.VOLUME_DOWN) return;
+
+        // Double Volume Up Logic
+        if (keyCode === KEY_CODES.VOLUME_UP) {
+            const now = Date.now();
+            if (now - this.lastVolumeUpTime < 400) {
+                this.triggerCommand(`DOUBLE_VOL_UP_${sourceName}`);
+                this.lastVolumeUpTime = 0;
+            } else {
+                this.lastVolumeUpTime = now;
+            }
+            return;
+        }
+
+        const validKeys = Object.values(KEY_CODES);
+        if (validKeys.includes(keyCode)) {
+            this.triggerCommand(`KEY_${keyCode}_${sourceName}`);
         }
     }
 
     public triggerCommand(source: string) {
         const now = Date.now();
-        if (now - this.lastCommandTime < 300) return; // Debounce
+        // Debounce unifié pour éviter les doublons si les deux systèmes (Accessibilité + Media) détectent la touche
+        if (now - this.lastCommandTime < 300) return;
 
         this.lastCommandTime = now;
         if (this.onCommand) this.onCommand(source);
