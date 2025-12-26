@@ -35,26 +35,36 @@ module.exports = function(config) {
               permissions: [
                 "android.permission.INTERNET",
                 "android.permission.ACCESS_NETWORK_STATE",
+                // CAMERA & MICRO
                 "android.permission.CAMERA",
                 "android.permission.RECORD_AUDIO",
+                // LOCALISATION
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
+                // SERVICES FOREGROUND
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                 "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+                // SYSTÈME
                 "android.permission.WAKE_LOCK",
                 "android.permission.BATTERY_STATS",
-                "android.permission.BLUETOOTH",
-                "android.permission.BLUETOOTH_CONNECT",
-                "android.permission.MODIFY_AUDIO_SETTINGS",
-                "android.permission.BIND_ACCESSIBILITY_SERVICE",
                 "android.permission.SYSTEM_ALERT_WINDOW",
                 "android.permission.REORDER_TASKS",
+                // BLUETOOTH (Appareils à proximité)
+                "android.permission.BLUETOOTH",
+                "android.permission.BLUETOOTH_CONNECT",
+                "android.permission.BLUETOOTH_SCAN", // AJOUT
+                "android.permission.MODIFY_AUDIO_SETTINGS",
+                // ACTIVITÉ PHYSIQUE (AJOUT)
+                "android.permission.ACTIVITY_RECOGNITION",
+                // ACCESSIBILITÉ
+                "android.permission.BIND_ACCESSIBILITY_SERVICE",
+                // TÉLÉPHONE (CallKeep)
                 "android.permission.MANAGE_OWN_CALLS",
                 "android.permission.READ_PHONE_STATE",
                 "android.permission.CALL_PHONE",
-                // PERMISSION CRITIQUE POUR LES NOTIFICATIONS APPEL / BT
+                // NOTIFICATIONS
                 "android.permission.POST_NOTIFICATIONS" 
               ]
             },
