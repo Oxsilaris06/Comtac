@@ -6,6 +6,7 @@ import uuid from 'react-native-uuid';
 import { VolumeManager } from 'react-native-volume-manager';
 import InCallManager from 'react-native-incall-manager';
 import { headsetService } from './headsetService';
+import MusicControl from 'react-native-music-control'; // AJOUT
 
 class AudioService {
   stream: MediaStream | null = null;
@@ -27,71 +28,47 @@ class AudioService {
     try {
       console.log("[Audio] Initializing...");
 
-      // 1. Setup CallKeep
+      // 1. Setup CallKeep (Audio/Mic)
       this.setupCallKeep();
 
-      // 2. Headset Listener - LE COEUR DU SYSTEME
-      // headsetService reçoit l'événement du Java (via react-native-keyevent)
-      // Le Java a déjà bloqué l'action système (Suivant/Précédent)
-      // Donc ici on exécute juste le Toggle VOX.
+      // 2. Setup Headset (MusicControl / Buttons)
       headsetService.setCommandCallback((source) => { 
-          console.log("[Audio] Headset Command Received:", source);
-          
-          // Sécurité : Si on reçoit une commande, on ré-applique le routing Audio
-          // au cas où le système aurait vacillé.
-          this.enforceAudioRoute();
-          
+          console.log("[Audio] Cmd:", source);
+          this.enforceAudioRoute(); // Sécurité
           this.toggleVox(); 
       });
-      
       headsetService.setConnectionCallback((isConnected, type) => { 
           this.handleRouteUpdate(isConnected, type); 
       });
-      
       headsetService.init();
 
-      // 3. Audio Config & Routing
+      // 3. Audio Config
       try {
           InCallManager.start({ media: 'audio' }); 
           InCallManager.setKeepScreenOn(true);
-          
-          // Vérification initiale
           this.enforceAudioRoute();
-          
-      } catch (e) {
-          console.warn("[Audio] InCallManager start warning:", e);
-      }
+      } catch (e) { console.warn("InCallManager error", e); }
 
       // 4. Micro
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
         this.setTx(false); 
-      } catch (e) {
-        console.error("Micro Error", e);
-        return false;
-      }
+      } catch (e) { return false; }
 
       this.setupVox();
-      try { await VolumeManager.setVolume(1.0); } catch (e) {} // Max volume pour être sûr
+      try { await VolumeManager.setVolume(1.0); } catch (e) {}
 
       this.isInitialized = true;
       return true;
-    } catch (err) {
-      console.error("[Audio] Init Error:", err);
-      return false;
-    }
+    } catch (err) { return false; }
   }
 
-  // Fonction pour forcer brutalement la sortie audio correcte
   private enforceAudioRoute() {
-      // Si headsetService dit qu'un casque est là (détecté via Android API)
       if (headsetService.isHeadsetConnected) {
-          console.log("[Audio] Enforcing Headset/Bluetooth Route");
           InCallManager.setForceSpeakerphoneOn(false);
-          InCallManager.chooseAudioRoute('Bluetooth'); // Force BT SCO
+          InCallManager.chooseAudioRoute('Bluetooth'); 
       } else {
-          console.log("[Audio] Enforcing Speaker Route");
           InCallManager.setForceSpeakerphoneOn(true);
       }
   }
@@ -102,7 +79,7 @@ class AudioService {
           ios: { appName: 'ComTac', includesCallsInRecents: false },
           android: {
             alertTitle: 'Permissions',
-            alertDescription: 'Accès appel requis',
+            alertDescription: 'Requis pour audio',
             cancelButton: 'Annuler',
             okButton: 'ok',
             imageName: 'phone_account_icon',
@@ -110,59 +87,61 @@ class AudioService {
             selfManaged: true, 
             foregroundService: {
               channelId: 'comtac_channel',
-              channelName: 'Foreground Service for ComTac',
+              channelName: 'Service Radio',
               notificationTitle: 'ComTac Radio Actif',
               notificationIcon: 'ic_launcher',
             },
           },
         };
 
-        RNCallKeep.setup(options).then(accepted => {
-            RNCallKeep.setAvailable(true);
-        });
-
+        RNCallKeep.setup(options).then(accepted => RNCallKeep.setAvailable(true));
         RNCallKeep.addEventListener('endCall', () => this.stopSession());
         RNCallKeep.addEventListener('answerCall', () => {}); 
         
-        // Gestion des événements CallKeep (au cas où le système passe outre l'Accessibilité)
-        RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted, callUUID }) => {
+        // Ecouteurs CallKeep (Backup)
+        RNCallKeep.addEventListener('didPerformSetMutedCallAction', () => {
             if (this.currentCallId) RNCallKeep.setMutedCall(this.currentCallId, false);
             this.toggleVox();
         });
-        
-        RNCallKeep.addEventListener('didToggleHoldCallAction', ({ hold, callUUID }) => {
+        RNCallKeep.addEventListener('didToggleHoldCallAction', () => {
              if (this.currentCallId) RNCallKeep.setOnHold(this.currentCallId, false);
             this.toggleVox();
         });
         
-      } catch (err) {
-        console.error('[CallKeep] Setup Error:', err);
-      }
+      } catch (err) {}
   }
 
   public startSession(roomName: string = "Tactical Net") {
       if (this.currentCallId) return;
       const newId = uuid.v4() as string;
       this.currentCallId = newId;
-      console.log("[Audio] Starting CallKeep Session:", newId);
+      
       RNCallKeep.startCall(newId, 'ComTac', roomName, 'generic', false);
       if (Platform.OS === 'android') {
           RNCallKeep.reportConnectedOutgoingCallWithUUID(newId);
       }
-      this.enforceAudioRoute(); // Force route au début de l'appel
+      this.enforceAudioRoute();
       this.updateNotification();
+      
+      // RE-FORCE MUSIC CONTROL PLAYING STATE
+      // C'est l'astuce pour récupérer les boutons si CallKeep les a volés
+      MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
   }
 
   public stopSession() {
       if (!this.currentCallId) return;
       RNCallKeep.endCall(this.currentCallId);
       this.currentCallId = null;
+      MusicControl.updatePlayback({ state: MusicControl.STATE_PAUSED });
   }
 
   private handleRouteUpdate(isConnected: boolean, type: string) {
-      console.log(`[Audio] Route Update Event: Connected=${isConnected} Type=${type}`);
-      // On re-vérifie via notre logique centrale
-      this.enforceAudioRoute();
+      if(isConnected) {
+          InCallManager.setForceSpeakerphoneOn(false); 
+          if (type.toLowerCase().includes('bluetooth')) InCallManager.chooseAudioRoute('Bluetooth');
+      } else {
+          InCallManager.setForceSpeakerphoneOn(true); 
+      }
       this.updateNotification();
   }
 
@@ -175,12 +154,10 @@ class AudioService {
 
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
-    
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
-    
     this.updateNotification();
     this.notifyListeners(); 
     return this.mode === 'vox'; 
@@ -191,6 +168,12 @@ class AudioService {
       const isVox = this.mode === 'vox';
       const statusText = isVox ? `VOX ON ${this.isTx ? '(TX)' : ''}` : 'PTT (Appuyez)';
       RNCallKeep.updateDisplay(this.currentCallId, `ComTac: ${statusText}`, 'Radio Tactique');
+      
+      // Update Music Control Notification too
+      MusicControl.updatePlayback({
+          state: MusicControl.STATE_PLAYING,
+          title: `ComTac: ${statusText}`
+      });
   }
 
   private setupVox() {
