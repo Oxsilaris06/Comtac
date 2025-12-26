@@ -1,6 +1,5 @@
-
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform } from 'react-native';
 import RNSoundLevel from 'react-native-sound-level';
 import InCallManager from 'react-native-incall-manager';
 import RNCallKeep from 'react-native-callkeep';
@@ -25,9 +24,10 @@ class AudioService {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Starting CallKeep Architecture...");
+      console.log("[AudioService] Init Start...");
 
-      // 1. HEADSET SERVICE
+      // 1. LIASION HEADSET (Entrées)
+      // On le fait en premier pour être sûr d'avoir les callbacks prêts
       try {
           headsetService.setCommandCallback((source) => { 
               if (source === 'PHYSICAL_PTT_START') this.setTx(true);
@@ -38,12 +38,13 @@ class AudioService {
               this.forceAudioRouting(isConnected);
           });
           headsetService.init();
-      } catch (e) { console.warn("HeadsetService Init Warning", e); }
+      } catch (e) { console.warn("HeadsetService Error", e); }
 
-      // 2. CALLKEEP SETUP (Critique)
+      // 2. SETUP CALLKEEP
+      // Important : Les permissions Notifications ont déjà été demandées dans App.tsx
       await this.setupCallKeep();
 
-      // 3. MICRO
+      // 3. MICROPHONE (L'app a déjà la permission via App.tsx)
       try {
         const constraints = {
             audio: {
@@ -56,42 +57,44 @@ class AudioService {
         this.stream = stream;
         this.setTx(false); 
       } catch (e) {
-        console.error("Micro Error", e);
-        return false;
+        console.error("Micro Error (getUserMedia)", e);
+        // On continue même si WebRTC fail, pour au moins avoir CallKeep actif
       }
 
-      // 4. DEMARRAGE APPEL FICTIF
+      // 4. LANCEMENT APPEL VIRTUEL (Pour le Bluetooth HFP)
       this.startDummyCall();
 
-      // 5. CONFIG INCALL
+      // 5. CONFIG SYSTEME AUDIO (InCallManager)
+      // On le lance APRES CallKeep pour éviter les conflits de focus audio
       try {
           InCallManager.start({ media: 'audio', auto: true, ringback: '' }); 
           InCallManager.setKeepScreenOn(true);
           InCallManager.setMicrophoneMute(false);
-          setTimeout(() => this.forceAudioRouting(headsetService.isHeadsetConnected), 1500);
-      } catch (e) {}
+          
+          // Petit délai pour laisser l'OS digérer
+          setTimeout(() => {
+              this.forceAudioRouting(headsetService.isHeadsetConnected);
+          }, 1000);
+      } catch (e) { console.warn("InCallManager Error", e); }
 
       this.setupVox();
       try { await VolumeManager.setVolume(0.8); } catch (e) {}
 
       this.isInitialized = true;
+      console.log("[AudioService] Init OK");
       return true;
     } catch (err) {
-      console.error("[Audio] Init Error:", err);
+      console.error("[AudioService] Init CRITICAL ERROR:", err);
       return false;
     }
   }
 
-  // --- CALLKEEP LOGIC ---
+  // --- CALLKEEP ---
   private async setupCallKeep() {
       if (Platform.OS !== 'android') return;
 
       try {
-          // Demande de permission Notification pour Android 13+ (Obligatoire pour Foreground Service)
-          if (Platform.Version >= 33) {
-              await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-          }
-
+          // On suppose que les permissions ont été gérées dans App.tsx
           await RNCallKeep.setup({
               ios: { appName: 'ComTac' },
               android: {
@@ -99,7 +102,6 @@ class AudioService {
                   alertDescription: 'ComTac a besoin de gérer les appels pour le bouton Bluetooth',
                   cancelButton: 'Annuler',
                   okButton: 'ok',
-                  // FIX CRITIQUE: 'ic_launcher' existe toujours, 'phone_account_icon' n'existe pas par défaut -> CRASH
                   imageName: 'ic_launcher', 
                   additionalPermissions: [],
                   foregroundService: {
@@ -114,15 +116,15 @@ class AudioService {
           
           RNCallKeep.setAvailable(true);
 
-          RNCallKeep.addEventListener('answerCall', ({ callUUID }) => this.toggleVox());
-          RNCallKeep.addEventListener('endCall', ({ callUUID }) => this.startDummyCall());
-          RNCallKeep.addEventListener('didToggleMute', ({ mute, callUUID }) => {
-              console.log("[Audio] CallKeep Toggle Mute Received");
+          RNCallKeep.addEventListener('answerCall', () => this.toggleVox());
+          RNCallKeep.addEventListener('endCall', () => this.startDummyCall());
+          RNCallKeep.addEventListener('didToggleMute', () => {
+              console.log("[CallKeep] Toggle Mute -> VOX Toggle");
               this.toggleVox();
           });
 
       } catch (e) {
-          console.error("CallKeep Setup Error", e);
+          console.error("CallKeep Setup Failed", e);
       }
   }
 
@@ -130,17 +132,19 @@ class AudioService {
       try {
           this.currentCallId = uuid.v4() as string;
           const handle = "ComTac Radio";
-          RNCallKeep.startCall(this.currentCallId, handle, handle, 'generic', false);
-          RNCallKeep.reportConnectedOutgoingCallWithUUID(this.currentCallId);
-          RNCallKeep.setMutedCall(this.currentCallId, false);
+          // On retarde un peu le startCall pour ne pas bloquer le thread principal au boot
+          setTimeout(() => {
+              RNCallKeep.startCall(this.currentCallId, handle, handle, 'generic', false);
+              RNCallKeep.reportConnectedOutgoingCallWithUUID(this.currentCallId);
+              RNCallKeep.setMutedCall(this.currentCallId, false);
+          }, 500);
       } catch (e) {
-          console.warn("Start Dummy Call Error", e);
+          console.warn("Dummy Call Failed", e);
       }
   }
 
-  // --- ROUTAGE AUDIO ---
+  // --- ROUTAGE ---
   private forceAudioRouting(isHeadset: boolean) {
-      console.log(`[Audio] Routing -> Headset: ${isHeadset}`);
       if(isHeadset) {
           InCallManager.setForceSpeakerphoneOn(false);
           InCallManager.setSpeakerphoneOn(false); 
