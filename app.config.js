@@ -1,4 +1,3 @@
-
 const { withAndroidManifest, withMainActivity, withDangerousMod, withStringsXml } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
@@ -43,7 +42,7 @@ module.exports = function(config) {
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-                "android.permission.FOREGROUND_SERVICE_PHONE_CALL", // Requis API 34
+                "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
                 "android.permission.WAKE_LOCK",
                 "android.permission.BATTERY_STATS",
                 "android.permission.BLUETOOTH",
@@ -54,7 +53,9 @@ module.exports = function(config) {
                 "android.permission.REORDER_TASKS",
                 "android.permission.MANAGE_OWN_CALLS",
                 "android.permission.READ_PHONE_STATE",
-                "android.permission.CALL_PHONE"
+                "android.permission.CALL_PHONE",
+                // PERMISSION CRITIQUE POUR LES NOTIFICATIONS APPEL / BT
+                "android.permission.POST_NOTIFICATIONS" 
               ]
             },
             plugins: [
@@ -89,7 +90,6 @@ function withCallKeepManifestFix(config) {
     const mainApplication = config.modResults.manifest.application[0];
     
     // 1. VoiceConnectionService
-    // C'est le service qui gère les appels. Android 14 exige qu'il soit protégé par BIND_TELECOM_CONNECTION_SERVICE
     const connectionServiceName = 'io.wazo.callkeep.VoiceConnectionService';
     let connectionService = mainApplication['service']?.find(s => s.$['android:name'] === connectionServiceName);
     
@@ -104,28 +104,26 @@ function withCallKeepManifestFix(config) {
     connectionService.$['android:exported'] = 'true';
     connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
 
-    // S'assurer que l'intent-filter est présent pour que le système le trouve
     if (!connectionService['intent-filter']) {
         connectionService['intent-filter'] = [{
             action: [{ $: { 'android:name': 'android.telecom.ConnectionService' } }]
         }];
     }
 
-    // 2. RNCallKeepBackgroundMessagingService (Pour la tenue en background)
+    // 2. RNCallKeepBackgroundMessagingService
     const bgServiceName = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
     let bgService = mainApplication['service']?.find(s => s.$['android:name'] === bgServiceName);
     if (!bgService) {
         bgService = { $: { 'android:name': bgServiceName } };
         mainApplication['service'].push(bgService);
     }
-    // Android 14 veut aussi un type ici
     bgService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
     
     return config;
   });
 }
 
-// --- PLUGIN 1 : INJECTION KOTLIN (Reste identique) ---
+// --- PLUGIN 1 : INJECTION KOTLIN ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -199,7 +197,7 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- PLUGIN 2 : SERVICE ACCESSIBILITÉ (Reste identique) ---
+// --- PLUGIN 2 : SERVICE ACCESSIBILITÉ ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -291,7 +289,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
   return config;
 }
 
-// --- PLUGIN 3 : FIX COMPATIBILITÉ GRADLE (Reste identique) ---
+// --- PLUGIN 3 : FIX COMPATIBILITÉ GRADLE ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
