@@ -1,8 +1,10 @@
+
 import './polyfills'; // Toujours en premier
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
-  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView, ActivityIndicator
+  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView, ActivityIndicator,
+  PermissionsAndroid // AJOUT IMPORT
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
@@ -119,7 +121,6 @@ const App: React.FC = () => {
       if (peerRef.current) peerRef.current.destroy();
       setPeers({}); setPings([]); setHostId(''); setView('login');
       
-      // STOP SESSION CALLKEEP
       audioService.stopSession();
       
       audioService.setTx(false); setVoxActive(false);
@@ -317,6 +318,18 @@ const App: React.FC = () => {
     console.log("[App] Starting Services Sequence...");
 
     try {
+        // A. PERMISSIONS NOTIFICATIONS (Android 13+) - CRITIQUE POUR BLUETOOTH
+        if (Platform.OS === 'android' && Platform.Version >= 33) {
+            const granted = await PermissionsAndroid.request(
+              PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+            );
+            if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+               console.warn("[App] Notification Permission Denied");
+               // On ne bloque pas mais on prévient que ça risque de mal marcher
+               showToast("Notifications requises pour le casque", "info");
+            }
+        }
+
         const audioStatus = await Audio.requestPermissionsAsync();
         if (!audioStatus.granted) {
             Alert.alert("Erreur Micro", "L'accès au micro est requis.");
