@@ -1,8 +1,9 @@
-import './polyfills'; 
+
+import './polyfills'; // Toujours en premier
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
-  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView, ActivityIndicator, PermissionsAndroid
+  SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView, ActivityIndicator
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
@@ -18,7 +19,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Magnetometer } from 'expo-sensors';
 import NetInfo from '@react-native-community/netinfo';
 import { Audio } from 'expo-av';
-import * as SplashScreen from 'expo-splash-screen'; // NOUVEAU
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
@@ -26,21 +26,18 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 import PrivacyConsentModal from './components/PrivacyConsentModal';
-import OperatorActionModal from './components/OperatorActionModal';
-
-// Empêche l'écran blanc de cacher le splash screen trop tôt
-SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
 
 const App: React.FC = () => {
-  // ... (Hooks et State identiques à avant)
   useKeepAwake();
   const [permission, requestPermission] = useCameraPermissions();
 
   const [user, setUser] = useState<UserData>({
-    id: '', callsign: '', role: OperatorRole.OPR, status: OperatorStatus.CLEAR, isTx: false,
-    joinedAt: Date.now(), bat: 100, head: 0, lat: 0, lng: 0 
+    id: '', callsign: '', role: OperatorRole.OPR,
+    status: OperatorStatus.CLEAR, isTx: false,
+    joinedAt: Date.now(), bat: 100, head: 0,
+    lat: 0, lng: 0 // On met 0 pour détecter qu'on n'a pas encore de fix GPS
   });
 
   const [view, setView] = useState<ViewType>('login');
@@ -70,80 +67,48 @@ const App: React.FC = () => {
   const [hasConsent, setHasConsent] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   
+  // Nouvel état pour suivre l'initialisation
   const [isServicesReady, setIsServicesReady] = useState(false);
-  const [loadingStep, setLoadingStep] = useState<string>('');
   const [gpsStatus, setGpsStatus] = useState<'WAITING' | 'OK' | 'ERROR'>('WAITING');
-  const [appIsReady, setAppIsReady] = useState(false); // Pour le splash screen
 
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<Record<string, any>>({});
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // Initialisation UI (Cache le splash screen quand prêt)
-  useEffect(() => {
-      async function prepare() {
-          try {
-              // Chargement des préférences, etc.
-              const saved = await AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY);
-              if (saved) setLoginInput(saved);
-          } catch (e) {
-              console.warn(e);
-          } finally {
-              setAppIsReady(true);
-              await SplashScreen.hideAsync();
-          }
-      }
-      prepare();
-  }, []);
-
-  // --- START SERVICES ---
-  const startServices = async () => {
-    if (!hasConsent || isServicesReady) return;
-    try {
-        if (Platform.OS === 'android') {
-            if (Platform.Version >= 33) await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-            if (Platform.Version >= 31) await PermissionsAndroid.requestMultiple([
-                PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT, PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN
-            ]);
-        }
-        await Audio.requestPermissionsAsync();
-        
-        await audioService.init(); 
-
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-             Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 }, (loc) => {
-                 setUser(prev => ({...prev, lat: loc.coords.latitude, lng: loc.coords.longitude}));
-                 setGpsStatus('OK');
-             });
-        }
-        setIsServicesReady(true);
-    } catch (e) { console.error("Init Error", e); }
-  };
-
-  useEffect(() => {
-      if (hasConsent && user.callsign && view !== 'login') startServices();
-  }, [hasConsent, view]); 
-
-  // --- LOGIQUE METIER STANDARD ---
+  // --- 1. GESTION RESEAU ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
       if (isOffline && !offline && view !== 'login' && hostId) {
-          showToast("Reconnexion...", "info");
-          setTimeout(() => { if (user.role === OperatorRole.HOST) initPeer(OperatorRole.HOST); else initPeer(OperatorRole.OPR, hostId); }, 2000);
+          showToast("Réseau retrouvé. Reconnexion...", "info");
+          setTimeout(() => {
+              if (user.role === OperatorRole.HOST) {
+                  initPeer(OperatorRole.HOST); 
+              } else {
+                  initPeer(OperatorRole.OPR, hostId); 
+              }
+          }, 2000);
       }
       setIsOffline(!!offline);
     });
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  useEffect(() => { const sub = audioService.subscribe((mode) => setVoxActive(mode === 'vox')); return sub; }, []);
+  // --- 2. ABONNEMENT AUDIO ---
+  useEffect(() => {
+      const unsubscribe = audioService.subscribe((mode) => {
+          setVoxActive(mode === 'vox');
+      });
+      return unsubscribe;
+  }, []);
+
+  // --- 3. CAPTEURS PASSIFS (Batterie, Compas, Trigramme) ---
+  useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
   useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
   useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
   
-  // Back Handler
+  // --- 4. BACK HANDLER ---
   useEffect(() => { const backAction = () => { if (selectedOperatorId) { setSelectedOperatorId(null); return true; } if (showQRModal) { setShowQRModal(false); return true; } if (showScanner) { setShowScanner(false); return true; } if (view === 'ops' || view === 'map') { Alert.alert("Déconnexion", user.role === OperatorRole.HOST ? "Fermer le salon ?" : "Quitter ?", [{ text: "Non", style: "cancel" }, { text: "QUITTER", onPress: handleLogout }]); return true; } return false; }; const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction); return () => backHandler.remove(); }, [view, user.role, selectedOperatorId, showQRModal, showScanner]);
 
   const showToast = useCallback((msg: string, type: 'info' | 'error' = 'info') => {
@@ -158,7 +123,7 @@ const App: React.FC = () => {
       audioService.setTx(false); setVoxActive(false);
       audioService.updateNotification("Déconnecté");
       setBannedPeers([]);
-      setIsServicesReady(false);
+      setIsServicesReady(false); // Reset l'état
   };
 
   const copyToClipboard = async () => { if (user.id) { await Clipboard.setStringAsync(user.id); showToast("ID Copié"); } };
@@ -217,11 +182,11 @@ const App: React.FC = () => {
             }}
         ]);
         break;
-      case 'PRIVATE_ACK': enterPrivateMode(data.from); showToast("Canal Privé"); break;
+      case 'PRIVATE_ACK': enterPrivateMode(data.from); showToast("Canal Privé Établi"); break;
       case 'PRIVATE_END': leavePrivateMode(); showToast("Fin Canal Privé"); break;
       case 'KICK': 
         if (peerRef.current) peerRef.current.destroy(); 
-        Alert.alert("Exclu", "Vous avez été exclu."); 
+        Alert.alert("Exclu", "Vous avez été exclu par l'Hôte."); 
         handleLogout(); 
         break;
     }
@@ -255,6 +220,8 @@ const App: React.FC = () => {
       if(conn) {
           conn.send({ type: 'PRIVATE_REQ', from: user.id });
           showToast("Demande envoyée");
+      } else {
+          showToast("Erreur de connexion", "error");
       }
       setSelectedOperatorId(null);
   };
@@ -323,10 +290,140 @@ const App: React.FC = () => {
     conn.on('error', () => handleHostDisconnect());
   }, [user, handleData, showToast, hostId, view]);
 
+  const handleHostDisconnect = () => {
+      if (user.role === OperatorRole.HOST) return;
+      showToast("CONNEXION PERDUE - MIGRATION...", "error");
+      const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
+      candidates.push(user);
+      candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+      const newHost = candidates[0];
+      if (newHost && newHost.id === user.id) {
+          promoteToHost();
+      } else if (newHost) {
+          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
+      }
+  };
+
+  const promoteToHost = () => {
+      setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
+      setHostId(user.id);
+      audioService.updateNotification(user.id);
+      showToast("JE SUIS LE NOUVEL HÔTE", "info");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  // --- 5. INITIALISATION SERVICES (Audio & GPS) ---
+  const startServices = async () => {
+    if (!hasConsent || isServicesReady) return;
+    
+    console.log("[App] Starting Services Sequence...");
+
+    try {
+        // A. AUDIO : On init le micro en premier
+        const audioStatus = await Audio.requestPermissionsAsync();
+        if (!audioStatus.granted) {
+            Alert.alert("Erreur Micro", "L'accès au micro est requis.");
+            return;
+        }
+
+        // On lance le service Audio (WebRTC + InCallManager)
+        const audioInitResult = await audioService.init();
+        if (!audioInitResult) {
+            showToast("Erreur init audio - Réessayer", "error");
+            return; // On arrête si l'audio a crashé
+        }
+
+        // Setup du Metering (VU-mètre)
+        audioService.startMetering((state) => {
+          const isTransmitting = state === 1;
+          if (isTransmitting !== user.isTx) {
+             if (silenceMode && user.role !== OperatorRole.HOST) return;
+             setUser(prev => {
+                const u = { ...prev, isTx: isTransmitting };
+                broadcast({ type: 'UPDATE', user: u });
+                return u;
+             });
+          }
+        });
+        
+        // B. GPS : On gère ça séparément pour ne pas bloquer l'UI
+        // On ne demande la permission que si elle n'est pas déjà là
+        const locationStatus = await Location.requestForegroundPermissionsAsync();
+        
+        if (locationStatus.status === 'granted') {
+            console.log("[App] GPS Permission Granted - Starting Watcher");
+            
+            // On récupère une première position "One Shot" pour éviter le "Paris par défaut"
+            // On utilise getCurrentPositionAsync avec un timeout court pour pas bloquer
+            try {
+                const initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                if (initialLoc && initialLoc.coords) {
+                    console.log("[App] Initial GPS Fix Found:", initialLoc.coords);
+                    setUser(prev => ({
+                        ...prev,
+                        lat: initialLoc.coords.latitude,
+                        lng: initialLoc.coords.longitude
+                    }));
+                    setGpsStatus('OK');
+                }
+            } catch (e) {
+                console.warn("[App] Initial GPS fix failed (timeout?), waiting for watcher...");
+            }
+
+            // On lance le tracking continu
+            Location.watchPositionAsync(
+              { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
+              (loc) => {
+                const { latitude, longitude, speed, heading, accuracy } = loc.coords;
+                // Filtrer les positions imprécises (> 50m)
+                if (accuracy && accuracy > 50) return;
+
+                setGpsStatus('OK'); // GPS confirme qu'il est vivant
+                
+                setUser(prev => {
+                  const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
+                  const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
+                  
+                  if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
+                    broadcast({ type: 'UPDATE', user: newUser });
+                    lastLocationRef.current = { lat: latitude, lng: longitude };
+                  }
+                  return newUser;
+                });
+              }
+            );
+        } else {
+             setGpsStatus('ERROR');
+             showToast("GPS Refusé", "error");
+        }
+
+        // C. CAMERA (Si besoin)
+        if (!permission?.granted) {
+            // On le fait en background, pas critique
+            requestPermission();
+        }
+
+        setIsServicesReady(true);
+        console.log("[App] Services Ready");
+
+    } catch (e) {
+        console.error("[App] Start Services Error", e);
+        showToast("Erreur critique services", "error");
+    }
+  };
+
+  useEffect(() => {
+      // On attend le consentement et un trigramme valide avant de lancer la séquence
+      if (hasConsent && user.callsign && view !== 'login') {
+          startServices();
+      }
+  }, [hasConsent, view]); 
+
   const handleLogin = async () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
+    
     setUser(prev => ({ ...prev, callsign: tri }));
     setView('menu');
   };
@@ -347,11 +444,7 @@ const App: React.FC = () => {
     setTimeout(() => joinSession(data), 500);
   };
 
-  if (!appIsReady) {
-      return null; // On affiche rien tant que l'app n'est pas prête (Splash est affiché par Expo)
-  }
-
-  // --- RENDER UI (Identique) ---
+  // --- RENDERS ---
   const renderLogin = () => (
     <View style={styles.centerContainer}>
       <MaterialIcons name="fingerprint" size={80} color="#3b82f6" style={{opacity: 0.8, marginBottom: 30}} />
@@ -371,9 +464,15 @@ const App: React.FC = () => {
       <View style={styles.menuContainer}>
         <View style={{flexDirection: 'row', justifyContent:'space-between', alignItems:'center', marginBottom: 20}}>
             <Text style={styles.sectionTitle}>DÉPLOIEMENT</Text>
+            {/* INDICATEUR ETAT DES SERVICES */}
             <View style={{flexDirection: 'row', alignItems: 'center', gap: 5}}>
-                {isServicesReady ? <MaterialIcons name="check-circle" size={16} color="#22c55e" /> : <ActivityIndicator size="small" color="#3b82f6" />}
-                {gpsStatus === 'OK' ? <MaterialIcons name="gps-fixed" size={16} color="#22c55e" /> : <MaterialIcons name="gps-not-fixed" size={16} color="#eab308" />}
+                {isServicesReady ? (
+                    <MaterialIcons name="check-circle" size={16} color="#22c55e" />
+                ) : (
+                    <ActivityIndicator size="small" color="#3b82f6" />
+                )}
+                {gpsStatus === 'WAITING' && <MaterialIcons name="gps-not-fixed" size={16} color="#eab308" />}
+                {gpsStatus === 'OK' && <MaterialIcons name="gps-fixed" size={16} color="#22c55e" />}
             </View>
             <TouchableOpacity onPress={handleLogout} style={{padding: 10}}>
                 <MaterialIcons name="power-settings-new" size={24} color="#ef4444" />
@@ -400,7 +499,12 @@ const App: React.FC = () => {
         <TouchableOpacity onPress={() => joinSession()} style={styles.joinBtn}>
             <Text style={styles.joinBtnText}>REJOINDRE</Text>
         </TouchableOpacity>
-        {loadingStep !== '' && !isServicesReady && <Text style={{color: '#eab308', textAlign: 'center', marginTop: 20, fontSize: 12}}>{loadingStep}</Text>}
+        
+        {!isServicesReady && (
+            <Text style={{color: '#eab308', textAlign: 'center', marginTop: 20, fontSize: 12}}>
+                Initialisation des systèmes...
+            </Text>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -433,27 +537,42 @@ const App: React.FC = () => {
           <ScrollView contentContainerStyle={styles.grid}>
              <OperatorCard user={user} isMe style={{ width: '100%' }} />
              {Object.values(peers).filter(p => p.id !== user.id).map(p => (
-                 <TouchableOpacity key={p.id} onLongPress={() => setSelectedOperatorId(p.id)} activeOpacity={0.8} style={{ width: '48%', marginBottom: 10 }}>
+                 <TouchableOpacity 
+                    key={p.id} 
+                    onLongPress={() => setSelectedOperatorId(p.id)} 
+                    activeOpacity={0.8}
+                    style={{ width: '48%', marginBottom: 10 }}
+                 >
                     <OperatorCard user={p} me={user} style={{ width: '100%' }} />
                  </TouchableOpacity>
              ))}
           </ScrollView>
         ) : (
           <View style={{flex: 1}}>
-            <TacticalMap 
-              me={user} peers={peers} pings={pings} 
-              mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
-              showPings={showPings} isHost={user.role === OperatorRole.HOST}
-              onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
-              onPingMove={(p) => { 
-                setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
-                broadcast({ type: 'PING_MOVE', id: p.id, lat: p.lat, lng: p.lng }); 
-              }}
-              onPingDelete={(id) => {
-                setPings(prev => prev.filter(p => p.id !== id));
-                broadcast({ type: 'PING_DELETE', id: id });
-              }}
-            />
+             {/* AFFICHER LA CARTE UNIQUEMENT SI LE GPS EST OK */}
+             {gpsStatus === 'OK' && user.lat !== 0 ? (
+                <TacticalMap 
+                  me={user} peers={peers} pings={pings} 
+                  mapMode={mapMode} showTrails={showTrails} pingMode={isPingMode}
+                  showPings={showPings} isHost={user.role === OperatorRole.HOST}
+                  onPing={(loc) => { setTempPingLoc(loc); setShowPingModal(true); }}
+                  onPingMove={(p) => { 
+                    setPings(prev => prev.map(pi => pi.id === p.id ? p : pi));
+                    broadcast({ type: 'PING_MOVE', id: p.id, lat: p.lat, lng: p.lng }); 
+                  }}
+                  onPingDelete={(id) => {
+                    setPings(prev => prev.filter(p => p.id !== id));
+                    broadcast({ type: 'PING_DELETE', id: id });
+                  }}
+                />
+             ) : (
+                <View style={{flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000'}}>
+                    <ActivityIndicator size="large" color="#3b82f6" />
+                    <Text style={{color: 'white', marginTop: 20}}>Acquisition signal GPS...</Text>
+                    <Text style={{color: '#71717a', fontSize: 12, marginTop: 5}}>Assurez-vous d'être à ciel ouvert</Text>
+                </View>
+             )}
+
             <View style={styles.mapControls}>
                 <TouchableOpacity onPress={() => setMapMode(m => m === 'dark' ? 'light' : m === 'light' ? 'satellite' : 'dark')} style={styles.mapBtn}>
                     <MaterialIcons name={mapMode === 'dark' ? 'dark-mode' : mapMode === 'light' ? 'light-mode' : 'satellite'} size={24} color="#d4d4d8" />
@@ -475,7 +594,10 @@ const App: React.FC = () => {
       <View style={styles.footer}>
         <View style={styles.statusRow}>
             {user.role === OperatorRole.HOST ? (
-               <TouchableOpacity onPress={() => { const ns = !silenceMode; setSilenceMode(ns); broadcast({ type: 'SILENCE', state: ns }); if(ns) {setVoxActive(false); audioService.setTx(false);} }} style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444'} : {borderColor: '#ef4444'}]}>
+               <TouchableOpacity 
+                  onPress={() => { const ns = !silenceMode; setSilenceMode(ns); broadcast({ type: 'SILENCE', state: ns }); if(ns) {setVoxActive(false); audioService.setTx(false);} }}
+                  style={[styles.statusBtn, silenceMode ? {backgroundColor: '#ef4444'} : {borderColor: '#ef4444'}]}
+               >
                    <Text style={[styles.statusBtnText, silenceMode ? {color:'white'} : {color: '#ef4444'}]}>SILENCE</Text>
                </TouchableOpacity>
             ) : null}
@@ -485,7 +607,17 @@ const App: React.FC = () => {
                 </TouchableOpacity>
             )}
             {!privatePeerId && [OperatorStatus.PROGRESSION, OperatorStatus.CONTACT, OperatorStatus.CLEAR].map(s => (
-                <TouchableOpacity key={s} onPress={() => { setUser(prev => { const updated = { ...prev, status: s }; broadcast({ type: 'UPDATE', user: updated }); return updated; }); }} style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}>
+                <TouchableOpacity 
+                    key={s} 
+                    onPress={() => {
+                        setUser(prev => {
+                            const updated = { ...prev, status: s };
+                            broadcast({ type: 'UPDATE', user: updated });
+                            return updated;
+                        });
+                    }}
+                    style={[styles.statusBtn, user.status === s ? { backgroundColor: STATUS_COLORS[s], borderColor: 'white' } : null]}
+                >
                     <Text style={[styles.statusBtnText, user.status === s ? {color:'white'} : null]}>{s}</Text>
                 </TouchableOpacity>
             ))}
@@ -494,7 +626,26 @@ const App: React.FC = () => {
             <TouchableOpacity onPress={() => { const newVox = audioService.toggleVox(); setVoxActive(newVox); }} style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}>
                 <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
             </TouchableOpacity>
-            <TouchableOpacity onPressIn={() => { if(silenceMode && user.role !== OperatorRole.HOST) return; if(!voxActive) { if (user.role !== OperatorRole.HOST) audioService.muteIncoming(true); audioService.setTx(true); setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } }} onPressOut={() => { if(!voxActive) { audioService.setTx(false); if (user.role !== OperatorRole.HOST) audioService.muteIncoming(false); setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); } }} style={[styles.pttBtn, user.isTx ? {backgroundColor: '#2563eb'} : null, silenceMode && user.role !== OperatorRole.HOST ? {opacity:0.5} : null]} disabled={silenceMode && user.role !== OperatorRole.HOST}>
+            <TouchableOpacity 
+                onPressIn={() => { 
+                    if(silenceMode && user.role !== OperatorRole.HOST) return; 
+                    if(!voxActive) { 
+                        if (user.role !== OperatorRole.HOST) audioService.muteIncoming(true);
+                        audioService.setTx(true); 
+                        setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); 
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
+                    }
+                }} 
+                onPressOut={() => { 
+                    if(!voxActive) { 
+                        audioService.setTx(false); 
+                        if (user.role !== OperatorRole.HOST) audioService.muteIncoming(false);
+                        setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); 
+                    }
+                }} 
+                style={[styles.pttBtn, user.isTx ? {backgroundColor: '#2563eb'} : null, silenceMode && user.role !== OperatorRole.HOST ? {opacity:0.5} : null]}
+                disabled={silenceMode && user.role !== OperatorRole.HOST}
+            >
                 <MaterialIcons name="mic" size={40} color={user.isTx ? 'white' : '#3f3f46'} />
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setShowQRModal(true)} style={styles.qrBtn}>
@@ -502,15 +653,57 @@ const App: React.FC = () => {
             </TouchableOpacity>
         </View>
       </View>
+    </View>
+  );
 
-      <OperatorActionModal 
-        visible={!!selectedOperatorId}
-        targetOperator={selectedOperatorId ? peers[selectedOperatorId] : null}
-        currentUserRole={user.role}
-        onClose={() => setSelectedOperatorId(null)}
-        onPrivateCall={handleRequestPrivate}
-        onKick={handleKickUser}
-      />
+  return (
+    <View style={styles.container}>
+      <StatusBar style="light" backgroundColor="#000" />
+      <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
+
+      {view === 'login' ? renderLogin() :
+       view === 'menu' ? renderMenu() :
+       renderDashboard()}
+
+      {/* MODALES ET TOAST... (Identique à avant) */}
+      <Modal 
+        visible={!!selectedOperatorId} 
+        animationType="fade" 
+        transparent
+        onRequestClose={() => setSelectedOperatorId(null)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedOperatorId(null)}>
+           <View style={[styles.modalContent, { backgroundColor: '#18181b', borderColor: '#333', borderWidth: 1 }]}>
+               
+               <View style={{alignItems: 'center', marginBottom: 20}}>
+                   <Text style={[styles.modalTitle, {color: 'white', marginBottom: 5}]}>ACTION OPÉRATEUR</Text>
+                   <Text style={{color: '#a1a1aa', fontSize: 16, fontWeight: 'bold'}}>
+                       {peers[selectedOperatorId || '']?.callsign || 'Inconnu'}
+                   </Text>
+               </View>
+               
+               <TouchableOpacity 
+                   onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} 
+                   style={[styles.modalBtn, {backgroundColor: '#d946ef', marginBottom: 12, width: '100%'}]}
+               >
+                   <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>APPEL PRIVÉ</Text>
+               </TouchableOpacity>
+               
+               {user.role === OperatorRole.HOST && (
+                   <TouchableOpacity 
+                       onPress={() => selectedOperatorId && handleKickUser(selectedOperatorId)} 
+                       style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 12, width: '100%'}]}
+                   >
+                        <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>BANNIR / KICK</Text>
+                   </TouchableOpacity>
+               )}
+               
+               <TouchableOpacity onPress={() => setSelectedOperatorId(null)} style={{padding: 10, marginTop: 5}}>
+                   <Text style={{color: '#71717a'}}>ANNULER</Text>
+               </TouchableOpacity>
+           </View>
+        </TouchableOpacity>
+      </Modal>
 
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
@@ -586,9 +779,6 @@ const App: React.FC = () => {
            <Text style={styles.toastText}>{toast.msg}</Text>
         </View>
       )}
-      
-      {/* Composant Modal Consentement */}
-      <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
     </View>
   );
 };

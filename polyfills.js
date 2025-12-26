@@ -1,13 +1,13 @@
-import 'react-native-get-random-values';
-// On sécurise l'import WebRTC au cas où le module natif n'est pas lié
-try {
-    const { registerGlobals } = require('react-native-webrtc');
-    registerGlobals();
-} catch (e) {
-    console.warn("WebRTC native module not found, some features may crash.");
-}
 
-// 1. GLOBAL & WINDOW
+import 'react-native-get-random-values';
+import { registerGlobals } from 'react-native-webrtc';
+
+// 1. Activation WebRTC
+registerGlobals();
+
+// 2. Simulation Environnement Navigateur COMPLET pour Hermes
+
+// A. Self & Window (CRITIQUE : Le fix pour l'erreur "Property 'S'")
 if (typeof window === 'undefined') {
     global.window = global;
 }
@@ -15,7 +15,7 @@ if (typeof self === 'undefined') {
     global.self = global;
 }
 
-// 2. PROCESS
+// B. Process (Manquant dans Hermes)
 if (typeof process === 'undefined') {
     global.process = {
         env: { NODE_ENV: __DEV__ ? 'development' : 'production' },
@@ -24,7 +24,7 @@ if (typeof process === 'undefined') {
     };
 }
 
-// 3. LOCATION (PeerJS)
+// C. Location (Requis par PeerJS)
 if (!global.window.location) {
     global.window.location = {
         protocol: 'https:',
@@ -38,7 +38,7 @@ if (!global.window.location) {
     };
 }
 
-// 4. NAVIGATOR
+// D. Navigator
 if (!global.navigator) {
     global.navigator = {};
 }
@@ -49,13 +49,13 @@ if (global.navigator.onLine === undefined) {
     global.navigator.onLine = true;
 }
 
-// 5. TIMERS
+// E. Timers
 const originalSetTimeout = setTimeout;
 global.setTimeout = (fn, ms, ...args) => {
     return originalSetTimeout(fn, ms || 0, ...args);
 };
 
-// 6. TEXT ENCODER (Critique PeerJS)
+// F. TextEncoder (CRITIQUE pour PeerJS + Hermes)
 if (typeof TextEncoder === 'undefined') {
     global.TextEncoder = class TextEncoder {
         encode(str) {
@@ -77,7 +77,7 @@ if (typeof TextDecoder === 'undefined') {
     };
 }
 
-// 7. CRYPTO FALLBACK (Critique UUID)
+// G. Crypto Fallback (Sécurité ultime anti-crash)
 if (typeof crypto === 'undefined') {
     global.crypto = {
         getRandomValues: (arr) => {
