@@ -1,5 +1,5 @@
-import './polyfills'; 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+// On retire l'import de polyfills d'ici car il est maintenant dans index.tsx
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
   SafeAreaView, Platform, Modal, StatusBar as RNStatusBar, Alert, BackHandler, ScrollView, ActivityIndicator, PermissionsAndroid
@@ -25,12 +25,43 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 import PrivacyConsentModal from './components/PrivacyConsentModal';
-// Import du composant corrigé pour la modale
 import OperatorActionModal from './components/OperatorActionModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
 
-const App: React.FC = () => {
+// --- ERROR BOUNDARY COMPONENT (Pour afficher les erreurs au lieu de l'écran blanc) ---
+class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: string}> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: '' };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error: error.toString() };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Uncaught error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={{flex:1, backgroundColor:'black', justifyContent:'center', alignItems:'center', padding:20}}>
+          <MaterialIcons name="error-outline" size={64} color="#ef4444" />
+          <Text style={{color:'white', fontSize:20, fontWeight:'bold', marginTop:20, marginBottom:10}}>CRASH DÉTECTÉ</Text>
+          <Text style={{color:'#f87171', textAlign:'center'}}>{this.state.error}</Text>
+          <TouchableOpacity onPress={() => this.setState({hasError: false})} style={{marginTop:30, backgroundColor:'#333', padding:15, borderRadius:10}}>
+             <Text style={{color:'white'}}>Réessayer</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const AppContent: React.FC = () => {
   useKeepAwake();
   const [permission, requestPermission] = useCameraPermissions();
 
@@ -68,7 +99,6 @@ const App: React.FC = () => {
   const [hasConsent, setHasConsent] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   
-  // États de chargement et services
   const [isServicesReady, setIsServicesReady] = useState(false);
   const [loadingStep, setLoadingStep] = useState<string>('');
   const [gpsStatus, setGpsStatus] = useState<'WAITING' | 'OK' | 'ERROR'>('WAITING');
@@ -78,53 +108,43 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- SÉQUENCE DE DÉMARRAGE BLINDÉE (Fix Crash Init) ---
+  // --- SÉQUENCE D'INITIALISATION ---
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
     
     console.log("[App] Lancement séquence initialisation...");
     
     try {
-        // ÉTAPE 1 : Permissions Android 13+ (Notifications)
-        // C'est CRITIQUE de le faire AVANT de toucher à CallKeep ou l'Audio
         if (Platform.OS === 'android') {
             setLoadingStep('Permissions Système...');
-            
-            // Android 13 (SDK 33) : Notifications requises pour Foreground Service
             if (Platform.Version >= 33) {
-                const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-                if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-                    Alert.alert("Attention", "Sans notifications, l'application risque de s'arrêter en arrière-plan.");
-                }
+                try {
+                    await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+                } catch(e) { console.warn("Notif perm error", e); }
             }
-
-            // Android 12 (SDK 31) : Bluetooth Connect (souvent géré auto mais mieux vaut être sûr)
             if (Platform.Version >= 31) {
-                await PermissionsAndroid.requestMultiple([
-                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN
-                ]);
+                try {
+                    await PermissionsAndroid.requestMultiple([
+                        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+                        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN
+                    ]);
+                } catch(e) { console.warn("BT perm error", e); }
             }
         }
 
-        // ÉTAPE 2 : Permission Micro (Bloquant pour WebRTC)
         setLoadingStep('Accès Micro...');
         const audioStatus = await Audio.requestPermissionsAsync();
         if (!audioStatus.granted) {
-            Alert.alert("Erreur Fatale", "L'accès au micro est requis pour la radio.");
+            Alert.alert("Erreur", "Micro requis.");
             return;
         }
 
-        // ÉTAPE 3 : Initialisation des Services Audio & CallKeep
-        // Maintenant qu'on a les permissions, on peut lancer les services sans crash
         setLoadingStep('Démarrage Radio...');
         const audioInitResult = await audioService.init();
         if (!audioInitResult) {
-            showToast("Erreur init audio - Réessayer", "error");
-            // On ne return pas forcément ici, on peut essayer de continuer sans audio parfait
+            showToast("Problème audio détecté", "error");
         }
 
-        // Setup du VU-mètre
         audioService.startMetering((state) => {
           const isTransmitting = state === 1;
           if (isTransmitting !== user.isTx) {
@@ -137,12 +157,10 @@ const App: React.FC = () => {
           }
         });
         
-        // ÉTAPE 4 : GPS (Non Bloquant)
         setLoadingStep('Géolocalisation...');
         const locationStatus = await Location.requestForegroundPermissionsAsync();
         
         if (locationStatus.status === 'granted') {
-            // Essai de position immédiate (rapide) pour éviter Paris par défaut
             try {
                 const initialLoc = await Location.getLastKnownPositionAsync();
                 if (initialLoc) {
@@ -153,33 +171,23 @@ const App: React.FC = () => {
                     }));
                     setGpsStatus('OK');
                 } else {
-                    // Fallback si pas de last known
                     const currLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
                     if(currLoc) {
-                        setUser(prev => ({
-                            ...prev,
-                            lat: currLoc.coords.latitude,
-                            lng: currLoc.coords.longitude
-                        }));
+                        setUser(prev => ({...prev, lat: currLoc.coords.latitude, lng: currLoc.coords.longitude}));
                         setGpsStatus('OK');
                     }
                 }
-            } catch (e) {
-                console.warn("GPS Initial Fix Failed", e);
-            }
+            } catch (e) {}
 
-            // Tracking continu
             Location.watchPositionAsync(
               { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
               (loc) => {
                 const { latitude, longitude, speed, heading, accuracy } = loc.coords;
-                if (accuracy && accuracy > 50) return; // Filtre précision
-                
+                if (accuracy && accuracy > 50) return;
                 setGpsStatus('OK');
                 setUser(prev => {
                   const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
                   const newUser = { ...prev, lat: latitude, lng: longitude, head: gpsHead };
-                  
                   if (!lastLocationRef.current || Math.abs(latitude - lastLocationRef.current.lat) > 0.0001 || Math.abs(longitude - lastLocationRef.current.lng) > 0.0001) {
                     broadcast({ type: 'UPDATE', user: newUser });
                     lastLocationRef.current = { lat: latitude, lng: longitude };
@@ -190,45 +198,37 @@ const App: React.FC = () => {
             );
         } else {
              setGpsStatus('ERROR');
-             showToast("GPS Refusé - Carte désactivée", "error");
         }
 
-        // ÉTAPE 5 : Caméra (Optionnel, en fond)
         if (!permission?.granted) {
             requestPermission();
         }
 
         setIsServicesReady(true);
         setLoadingStep('');
-        console.log("[App] Services Ready");
 
     } catch (e) {
         console.error("[App] Start Services Error", e);
-        showToast("Erreur critique services", "error");
-        setLoadingStep('Erreur Init');
+        showToast("Erreur init services", "error");
+        setLoadingStep('');
     }
   };
 
   useEffect(() => {
-      // Trigger : Consentement + Trigramme + Vue Menu
       if (hasConsent && user.callsign && view !== 'login') {
           startServices();
       }
   }, [hasConsent, view]); 
 
-  // --- LOGIQUE METIER & UI EXISTANTE ---
-  
+  // --- LOGIQUE METIER ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
       if (isOffline && !offline && view !== 'login' && hostId) {
-          showToast("Réseau retrouvé. Reconnexion...", "info");
+          showToast("Reconnexion...", "info");
           setTimeout(() => {
-              if (user.role === OperatorRole.HOST) {
-                  initPeer(OperatorRole.HOST); 
-              } else {
-                  initPeer(OperatorRole.OPR, hostId); 
-              }
+              if (user.role === OperatorRole.HOST) initPeer(OperatorRole.HOST); 
+              else initPeer(OperatorRole.OPR, hostId); 
           }, 2000);
       }
       setIsOffline(!!offline);
@@ -320,11 +320,11 @@ const App: React.FC = () => {
             }}
         ]);
         break;
-      case 'PRIVATE_ACK': enterPrivateMode(data.from); showToast("Canal Privé Établi"); break;
+      case 'PRIVATE_ACK': enterPrivateMode(data.from); showToast("Canal Privé"); break;
       case 'PRIVATE_END': leavePrivateMode(); showToast("Fin Canal Privé"); break;
       case 'KICK': 
         if (peerRef.current) peerRef.current.destroy(); 
-        Alert.alert("Exclu", "Vous avez été exclu par l'Hôte."); 
+        Alert.alert("Exclu", "Vous avez été exclu."); 
         handleLogout(); 
         break;
     }
@@ -358,8 +358,6 @@ const App: React.FC = () => {
       if(conn) {
           conn.send({ type: 'PRIVATE_REQ', from: user.id });
           showToast("Demande envoyée");
-      } else {
-          showToast("Erreur de connexion", "error");
       }
       setSelectedOperatorId(null);
   };
@@ -430,7 +428,7 @@ const App: React.FC = () => {
 
   const handleHostDisconnect = () => {
       if (user.role === OperatorRole.HOST) return;
-      showToast("CONNEXION PERDUE - MIGRATION...", "error");
+      showToast("CONNEXION PERDUE", "error");
       const candidates = Object.values(peers).filter(p => p.id !== hostId && p.id !== user.id);
       candidates.push(user);
       candidates.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
@@ -438,7 +436,7 @@ const App: React.FC = () => {
       if (newHost && newHost.id === user.id) {
           promoteToHost();
       } else if (newHost) {
-          setTimeout(() => { connectToHost(newHost.id); }, 500 + Math.random() * 1000);
+          setTimeout(() => { connectToHost(newHost.id); }, 1000);
       }
   };
 
@@ -446,7 +444,7 @@ const App: React.FC = () => {
       setUser(prev => ({ ...prev, role: OperatorRole.HOST }));
       setHostId(user.id);
       audioService.updateNotification(user.id);
-      showToast("JE SUIS LE NOUVEL HÔTE", "info");
+      showToast("JE SUIS HÔTE", "info");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
@@ -474,7 +472,6 @@ const App: React.FC = () => {
     setTimeout(() => joinSession(data), 500);
   };
 
-  // --- RENDERS UI ---
   const renderLogin = () => (
     <View style={styles.centerContainer}>
       <MaterialIcons name="fingerprint" size={80} color="#3b82f6" style={{opacity: 0.8, marginBottom: 30}} />
@@ -500,8 +497,7 @@ const App: React.FC = () => {
                 ) : (
                     <ActivityIndicator size="small" color="#3b82f6" />
                 )}
-                {gpsStatus === 'WAITING' && <MaterialIcons name="gps-not-fixed" size={16} color="#eab308" />}
-                {gpsStatus === 'OK' && <MaterialIcons name="gps-fixed" size={16} color="#22c55e" />}
+                {gpsStatus === 'OK' ? <MaterialIcons name="gps-fixed" size={16} color="#22c55e" /> : <MaterialIcons name="gps-not-fixed" size={16} color="#eab308" />}
             </View>
             <TouchableOpacity onPress={handleLogout} style={{padding: 10}}>
                 <MaterialIcons name="power-settings-new" size={24} color="#ef4444" />
@@ -558,7 +554,7 @@ const App: React.FC = () => {
           </SafeAreaView>
           {silenceMode && (<View style={styles.silenceBanner}><Text style={styles.silenceText}>SILENCE RADIO</Text></View>)}
           {privatePeerId && (<View style={[styles.silenceBanner, {backgroundColor: '#a855f7'}]}><Text style={styles.silenceText}>CANAL PRIVÉ ACTIF</Text></View>)}
-          {isOffline && (<View style={[styles.silenceBanner, {backgroundColor: '#ef4444'}]}><Text style={styles.silenceText}>CONNEXION PERDUE - RECONNEXION...</Text></View>)}
+          {isOffline && (<View style={[styles.silenceBanner, {backgroundColor: '#ef4444'}]}><Text style={styles.silenceText}>RECONNEXION...</Text></View>)}
       </View>
 
       <View style={styles.mainContent}>
@@ -765,6 +761,15 @@ const App: React.FC = () => {
         </View>
       )}
     </View>
+  );
+};
+
+// Wrapper App avec ErrorBoundary pour éviter l'écran blanc
+const App: React.FC = () => {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
   );
 };
 
