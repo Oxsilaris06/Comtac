@@ -33,7 +33,6 @@ class AudioService {
       // 2. Headset Listener
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Headset Command:", source);
-          // Toute touche reconnue (Mute, Play, Hook) bascule le mode
           this.toggleVox(); 
       });
       
@@ -43,17 +42,19 @@ class AudioService {
       
       headsetService.init();
 
-      // 3. Audio Config
+      // 3. Audio Config & Routing
       try {
           // On démarre en mode audio "Voice Call" pour la priorité
           InCallManager.start({ media: 'audio' }); 
           InCallManager.setKeepScreenOn(true);
           
-          // Force Speaker si pas de casque au démarrage
-          if (!headsetService.isHeadsetConnected) {
-              InCallManager.setForceSpeakerphoneOn(true);
-          } else {
+          // Vérification initiale agressive
+          if (headsetService.isHeadsetConnected) {
+              console.log("[Audio] Headset detected at init - Forcing Route");
               InCallManager.setForceSpeakerphoneOn(false);
+              InCallManager.chooseAudioRoute('Bluetooth'); // Force Bluetooth SCO
+          } else {
+              InCallManager.setForceSpeakerphoneOn(true);
           }
       } catch (e) {
           console.warn("[Audio] InCallManager start warning:", e);
@@ -79,6 +80,8 @@ class AudioService {
       return false;
     }
   }
+
+  // ... (setupCallKeep reste identique avec les fixes Mute/Hold)
 
   private setupCallKeep() {
       try {
@@ -108,19 +111,13 @@ class AudioService {
         RNCallKeep.addEventListener('endCall', () => this.stopSession());
         RNCallKeep.addEventListener('answerCall', () => {}); 
         
-        // --- CORRECTIF CRITIQUE BLUETOOTH ---
-        // Quand on appuie sur MUTE sur le casque :
         RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted, callUUID }) => {
-            // 1. On force IMMEDIATEMENT le système à rester "Unmuted"
-            // Cela empêche Android de couper le canal Bluetooth SCO et de repasser sur le Speaker
             if (this.currentCallId) {
                 RNCallKeep.setMutedCall(this.currentCallId, false);
             }
-            // 2. On bascule notre logique interne (VOX / PTT)
             this.toggleVox();
         });
         
-        // Même logique pour le bouton "Hold"
         RNCallKeep.addEventListener('didToggleHoldCallAction', ({ hold, callUUID }) => {
              if (this.currentCallId) {
                 RNCallKeep.setOnHold(this.currentCallId, false);
@@ -133,19 +130,16 @@ class AudioService {
       }
   }
 
+  // ... (startSession, stopSession identiques)
   public startSession(roomName: string = "Tactical Net") {
       if (this.currentCallId) return;
-
       const newId = uuid.v4() as string;
       this.currentCallId = newId;
-
       console.log("[Audio] Starting CallKeep Session:", newId);
       RNCallKeep.startCall(newId, 'ComTac', roomName, 'generic', false);
-      
       if (Platform.OS === 'android') {
           RNCallKeep.reportConnectedOutgoingCallWithUUID(newId);
       }
-      
       this.updateNotification();
   }
 
@@ -157,9 +151,16 @@ class AudioService {
 
   private handleRouteUpdate(isConnected: boolean, type: string) {
       console.log(`[Audio] Route Update: Connected=${isConnected} Type=${type}`);
-      // Sécurité : On force le routing correct via InCallManager
+      
       if(isConnected) {
+          // On force le mode casque
           InCallManager.setForceSpeakerphoneOn(false); 
+          
+          // Si c'est du Bluetooth, on force explicitement la route Bluetooth SCO
+          if (type.toLowerCase().includes('bluetooth')) {
+              console.log("[Audio] Forcing Bluetooth SCO connection");
+              InCallManager.chooseAudioRoute('Bluetooth');
+          }
       } else {
           InCallManager.setForceSpeakerphoneOn(true); 
       }
@@ -176,17 +177,17 @@ class AudioService {
   toggleVox() {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     
-    // Si on passe en PTT, on coupe l'émission immédiatement
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
     
-    // Feedback Haptique ou Sonore pourrait être ajouté ici
     this.updateNotification();
-    this.notifyListeners();
+    this.notifyListeners(); // C'est ça qui mettra à jour l'UI dans App.tsx
+    return this.mode === 'vox'; // Renvoie le nouvel état au cas où
   }
 
+  // ... (updateNotification, setupVox, setTx identiques)
   updateNotification() {
       if (!this.currentCallId) return;
       const isVox = this.mode === 'vox';
@@ -218,7 +219,6 @@ class AudioService {
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
   
-  // Stubs pour compatibilité
   muteIncoming(mute: boolean) {}
   playStream(remoteStream: MediaStream) {}
 }
