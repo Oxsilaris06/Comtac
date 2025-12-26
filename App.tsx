@@ -25,6 +25,7 @@ import { audioService } from './services/audioService';
 import OperatorCard from './components/OperatorCard';
 import TacticalMap from './components/TacticalMap';
 import PrivacyConsentModal from './components/PrivacyConsentModal';
+// Import du composant corrigé pour la modale
 import OperatorActionModal from './components/OperatorActionModal';
 
 const generateShortId = () => Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -67,7 +68,7 @@ const App: React.FC = () => {
   const [hasConsent, setHasConsent] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   
-  // États de chargement
+  // États de chargement et services
   const [isServicesReady, setIsServicesReady] = useState(false);
   const [loadingStep, setLoadingStep] = useState<string>('');
   const [gpsStatus, setGpsStatus] = useState<'WAITING' | 'OK' | 'ERROR'>('WAITING');
@@ -77,14 +78,14 @@ const App: React.FC = () => {
   const lastLocationRef = useRef<any>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- 1. SÉQUENCE DE DÉMARRAGE BLINDÉE ---
+  // --- SÉQUENCE DE DÉMARRAGE BLINDÉE (Fix Crash Init) ---
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
     
     console.log("[App] Lancement séquence initialisation...");
     
     try {
-        // ÉTAPE 1 : Permissions Android 13+ (Notifications & Bluetooth)
+        // ÉTAPE 1 : Permissions Android 13+ (Notifications)
         // C'est CRITIQUE de le faire AVANT de toucher à CallKeep ou l'Audio
         if (Platform.OS === 'android') {
             setLoadingStep('Permissions Système...');
@@ -97,7 +98,7 @@ const App: React.FC = () => {
                 }
             }
 
-            // Android 12 (SDK 31) : Bluetooth Connect requis pour Headset
+            // Android 12 (SDK 31) : Bluetooth Connect (souvent géré auto mais mieux vaut être sûr)
             if (Platform.Version >= 31) {
                 await PermissionsAndroid.requestMultiple([
                     PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
@@ -120,7 +121,7 @@ const App: React.FC = () => {
         const audioInitResult = await audioService.init();
         if (!audioInitResult) {
             showToast("Erreur init audio - Réessayer", "error");
-            return;
+            // On ne return pas forcément ici, on peut essayer de continuer sans audio parfait
         }
 
         // Setup du VU-mètre
@@ -137,12 +138,11 @@ const App: React.FC = () => {
         });
         
         // ÉTAPE 4 : GPS (Non Bloquant)
-        // On demande la permission GPS à la fin pour ne pas ralentir le boot audio
         setLoadingStep('Géolocalisation...');
         const locationStatus = await Location.requestForegroundPermissionsAsync();
         
         if (locationStatus.status === 'granted') {
-            // Essai de position immédiate (rapide)
+            // Essai de position immédiate (rapide) pour éviter Paris par défaut
             try {
                 const initialLoc = await Location.getLastKnownPositionAsync();
                 if (initialLoc) {
@@ -152,15 +152,29 @@ const App: React.FC = () => {
                         lng: initialLoc.coords.longitude
                     }));
                     setGpsStatus('OK');
+                } else {
+                    // Fallback si pas de last known
+                    const currLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                    if(currLoc) {
+                        setUser(prev => ({
+                            ...prev,
+                            lat: currLoc.coords.latitude,
+                            lng: currLoc.coords.longitude
+                        }));
+                        setGpsStatus('OK');
+                    }
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.warn("GPS Initial Fix Failed", e);
+            }
 
             // Tracking continu
             Location.watchPositionAsync(
               { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 10 },
               (loc) => {
                 const { latitude, longitude, speed, heading, accuracy } = loc.coords;
-                if (accuracy && accuracy > 50) return;
+                if (accuracy && accuracy > 50) return; // Filtre précision
+                
                 setGpsStatus('OK');
                 setUser(prev => {
                   const gpsHead = (speed && speed > 1 && heading !== null) ? heading : prev.head;
@@ -202,7 +216,7 @@ const App: React.FC = () => {
       }
   }, [hasConsent, view]); 
 
-  // --- REST OF THE LOGIC ---
+  // --- LOGIQUE METIER & UI EXISTANTE ---
   
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
@@ -441,7 +455,7 @@ const App: React.FC = () => {
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
     setUser(prev => ({ ...prev, callsign: tri }));
-    setView('menu'); // Déclenchera useEffect -> startServices
+    setView('menu');
   };
 
   const joinSession = (id?: string) => {
@@ -460,6 +474,7 @@ const App: React.FC = () => {
     setTimeout(() => joinSession(data), 500);
   };
 
+  // --- RENDERS UI ---
   const renderLogin = () => (
     <View style={styles.centerContainer}>
       <MaterialIcons name="fingerprint" size={80} color="#3b82f6" style={{opacity: 0.8, marginBottom: 30}} />
@@ -604,7 +619,6 @@ const App: React.FC = () => {
       </View>
 
       <View style={styles.footer}>
-        {/* Footer controls identique à avant */}
         <View style={styles.statusRow}>
             {user.role === OperatorRole.HOST ? (
                <TouchableOpacity 
@@ -676,7 +690,6 @@ const App: React.FC = () => {
         onKick={handleKickUser}
       />
 
-      {/* AUTRES MODALES... (QR, Scanner, Ping, Toast) */}
       <Modal visible={showQRModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
