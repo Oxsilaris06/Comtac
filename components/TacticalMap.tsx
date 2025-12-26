@@ -12,13 +12,14 @@ interface TacticalMapProps {
   showPings: boolean;
   pingMode: boolean;
   isHost: boolean;
+  userArrowColor: string; // NOUVEAU PROP
   onPing: (loc: { lat: number; lng: number }) => void;
   onPingMove: (ping: PingData) => void;
   onPingDelete: (id: string) => void;
 }
 
 const TacticalMap: React.FC<TacticalMapProps> = ({
-  me, peers, pings, mapMode, showTrails, showPings, pingMode, isHost,
+  me, peers, pings, mapMode, showTrails, showPings, pingMode, isHost, userArrowColor, // destructuration
   onPing, onPingMove, onPingDelete
 }) => {
   const webViewRef = useRef<WebView>(null);
@@ -35,6 +36,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         .leaflet-control-attribution { display: none; }
         
         .tac-wrapper { transition: transform 0.1s linear; } 
+        /* La couleur par défaut est bleue, mais on va l'injecter en JS */
         .tac-arrow { width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-bottom: 24px solid #3b82f6; filter: drop-shadow(0 0 4px #3b82f6); }
         .tac-label { position: absolute; top: 28px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: white; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 10px; font-weight: bold; white-space: nowrap; border: 1px solid #3b82f6; }
         
@@ -84,6 +86,9 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         const trails = {}; 
         const pingLayer = L.layerGroup().addTo(map);
         let pings = {};
+        
+        // CUSTOM USER COLOR
+        let userArrowColor = '#3b82f6';
 
         function getStatusColor(status) {
              switch(status) {
@@ -91,8 +96,8 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                  case 'CLEAR': return '#22c55e';   
                  case 'APPUI': return '#eab308';   
                  case 'BUSY': return '#a855f7';    
-                 case 'PROGRESSION': return '#3b82f6'; 
-                 default: return '#3b82f6';
+                 case 'PROGRESSION': return userArrowColor; // Utilise la couleur user pour progression
+                 default: return userArrowColor;
              }
         }
 
@@ -103,6 +108,9 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
 
         function handleData(data) {
             if (data.type === 'UPDATE_MAP') {
+                // Mise à jour de la couleur utilisateur si changée
+                if(data.userArrowColor) userArrowColor = data.userArrowColor;
+                
                 updateMapMode(data.mode);
                 updateMarkers(data.me, data.peers, data.showTrails);
                 updatePings(data.pings, data.showPings, data.isHost, data.me.callsign);
@@ -120,7 +128,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
         }
 
         function updateMarkers(me, peers, showTrails) {
-            // FIX DOUBLON: Filtrer 'me' de la liste des pairs
             const validPeers = Object.values(peers).filter(p => p.id !== me.id);
             const all = [me, ...validPeers].filter(u => u && u.lat);
             
@@ -128,7 +135,21 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
             Object.keys(markers).forEach(id => { if(!activeIds.includes(id)) { map.removeLayer(markers[id]); delete markers[id]; } });
 
             all.forEach(u => {
-                const iconHtml = \`<div class="tac-wrapper status-\${u.status}" style="transform: rotate(\${u.head||0}deg);"><div class="tac-arrow"></div></div><div class="tac-label status-\${u.status}">\${u.callsign}</div>\`;
+                // GESTION COULEUR CUSTOM
+                // Si c'est 'me' ou si le statut est 'PROGRESSION' ou undefined, on utilise la couleur custom
+                // Sinon on garde les couleurs tactiques strictes (CONTACT, etc.)
+                let arrowColor = getStatusColor(u.status);
+                let labelColor = arrowColor;
+                
+                // Construction HTML dynamique avec la couleur
+                const iconHtml = \`
+                  <div class="tac-wrapper status-\${u.status}" style="transform: rotate(\${u.head||0}deg);">
+                    <div class="tac-arrow" style="border-bottom-color: \${arrowColor}; filter: drop-shadow(0 0 4px \${arrowColor});"></div>
+                  </div>
+                  <div class="tac-label status-\${u.status}" style="border-color: \${labelColor}; color: \${labelColor};">
+                    \${u.callsign}
+                  </div>\`;
+                
                 const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [40, 40], iconAnchor: [20, 20] });
                 
                 if (markers[u.id]) { 
@@ -138,7 +159,7 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                     markers[u.id] = L.marker([u.lat, u.lng], {icon: icon, zIndexOffset: u.id === me.id ? 1000 : 500}).addTo(map); 
                 }
                 
-                // --- TRACÉS MULTICOULEURS ---
+                // --- TRACÉS ---
                 if (!trails[u.id]) trails[u.id] = { segments: [] };
                 const userTrail = trails[u.id];
                 let currentSegment = userTrail.segments.length > 0 ? userTrail.segments[userTrail.segments.length - 1] : null;
@@ -146,7 +167,6 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
 
                 if (!lastPoint || Math.abs(lastPoint.lat - u.lat) > 0.00005 || Math.abs(lastPoint.lng - u.lng) > 0.00005) {
                     if (!currentSegment || currentSegment.status !== u.status) {
-                        // Changement de statut = Nouveau segment
                         const newColor = getStatusColor(u.status);
                         const pts = lastPoint ? [lastPoint, [u.lat, u.lng]] : [[u.lat, u.lng]];
                         const newLine = L.polyline(pts, {color: newColor, weight: 2, dashArray: '4,4', opacity: 0.6});
@@ -154,10 +174,8 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
                         userTrail.segments.push({ line: newLine, status: u.status });
                         currentSegment = newLine;
                     } else {
-                        // Même statut = Extension
                         currentSegment.line.addLatLng([u.lat, u.lng]);
                     }
-                    // Nettoyage historique
                     if (userTrail.segments.length > 50) {
                         const removed = userTrail.segments.shift();
                         map.removeLayer(removed.line);
@@ -207,10 +225,11 @@ const TacticalMap: React.FC<TacticalMapProps> = ({
   useEffect(() => {
     if (webViewRef.current) {
       webViewRef.current.postMessage(JSON.stringify({
-        type: 'UPDATE_MAP', me, peers, pings, mode: mapMode, showTrails, showPings, isHost
+        type: 'UPDATE_MAP', me, peers, pings, mode: mapMode, showTrails, showPings, isHost,
+        userArrowColor // ENVOI VERS WEBVIEW
       }));
     }
-  }, [me, peers, pings, mapMode, showTrails, showPings, isHost]);
+  }, [me, peers, pings, mapMode, showTrails, showPings, isHost, userArrowColor]);
 
   const handleMessage = (event: any) => {
     try {
