@@ -6,7 +6,7 @@ module.exports = function(config) {
   return withAccessibilityService(
     withKeyEventBuildGradleFix(
       withMainActivityInjection(
-        withMusicControlFix({
+        {
           name: "COM TAC v14",
           slug: "comtac-v14",
           version: "1.0.0",
@@ -39,7 +39,6 @@ module.exports = function(config) {
               "android.permission.ACCESS_FINE_LOCATION",
               "android.permission.ACCESS_COARSE_LOCATION",
               "android.permission.FOREGROUND_SERVICE",
-              // AJOUTS CRITIQUES POUR ANDROID 14
               "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
               "android.permission.FOREGROUND_SERVICE_MICROPHONE",
               "android.permission.WAKE_LOCK",
@@ -50,6 +49,7 @@ module.exports = function(config) {
               "android.permission.BIND_ACCESSIBILITY_SERVICE",
               "android.permission.SYSTEM_ALERT_WINDOW",
               "android.permission.REORDER_TASKS",
+              // PERMISSIONS CRITIQUES POUR CALLKEEP
               "android.permission.MANAGE_OWN_CALLS",
               "android.permission.READ_PHONE_STATE"
             ]
@@ -73,7 +73,7 @@ module.exports = function(config) {
             ],
             "@config-plugins/react-native-webrtc"
           ]
-        })
+        }
       )
     )
   );
@@ -106,7 +106,6 @@ function withMainActivityInjection(config) {
          }
       }
 
-      // AJOUT : Sécurité "getInstance() != null" pour éviter le crash au démarrage
       if (!src.includes('private val comTacReceiver')) {
         const lastBrace = src.lastIndexOf('}');
         const codeToInject = `
@@ -115,7 +114,6 @@ function withMainActivityInjection(config) {
     override fun onReceive(context: Context, intent: Intent) {
       if ("COMTAC_HARDWARE_EVENT" == intent.action) {
         val keyCode = intent.getIntExtra("keyCode", 0)
-        // Null Check pour éviter le crash au boot
         if (KeyEventModule.getInstance() != null) {
             KeyEventModule.getInstance().onKeyDownEvent(keyCode, null)
         }
@@ -125,7 +123,6 @@ function withMainActivityInjection(config) {
 
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
     if (event.action == KeyEvent.ACTION_DOWN) {
-       // Null Check critique
        if (KeyEventModule.getInstance() != null) {
            KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
        }
@@ -156,7 +153,7 @@ function withMainActivityInjection(config) {
   });
 }
 
-// ... (Le reste des plugins withAccessibilityService, withKeyEventBuildGradleFix, withMusicControlFix reste identique) ...
+// --- PLUGIN 2 : SERVICE ACCESSIBILITÉ (BOUTONS PHYSIQUES) ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -247,6 +244,8 @@ public class ComTacAccessibilityService extends AccessibilityService {
   });
   return config;
 }
+
+// --- PLUGIN 3 : FIX COMPATIBILITÉ GRADLE ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
@@ -270,17 +269,4 @@ function withKeyEventBuildGradleFix(config) {
       return config;
     },
   ]);
-}
-function withMusicControlFix(config) {
-  return withAndroidManifest(config, async (config) => {
-    const mainApplication = config.modResults.manifest.application[0];
-    const serviceName = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotification';
-    if (!mainApplication['service']?.some(s => s.$['android:name'] === serviceName)) {
-      mainApplication['service'] = mainApplication['service'] || [];
-      mainApplication['service'].push({
-        $: { 'android:name': serviceName, 'android:exported': 'true', 'android:foregroundServiceType': 'mediaPlayback' }
-      });
-    }
-    return config;
-  });
 }
