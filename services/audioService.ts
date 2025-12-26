@@ -1,11 +1,11 @@
+
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform } from 'react-native';
 import RNSoundLevel from 'react-native-sound-level';
-import InCallManager from 'react-native-incall-manager';
-import RNCallKeep from 'react-native-callkeep';
-import uuid from 'react-native-uuid';
-import { headsetService } from './headsetService';
+import MusicControl, { Command } from 'react-native-music-control';
 import { VolumeManager } from 'react-native-volume-manager';
+import InCallManager from 'react-native-incall-manager';
+import { headsetService } from './headsetService';
 
 class AudioService {
   stream: MediaStream | null = null;
@@ -15,127 +15,71 @@ class AudioService {
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
-  private currentCallId: string = '';
-  private isInitialized = false;
+  keepAliveTimer: any = null;
+  
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
+  private isInitialized = false;
 
   async init(): Promise<boolean> {
-    if (this.isInitialized) return true;
+    if (this.isInitialized) return true; // Évite les double-init
 
     try {
-      console.log("[Audio] Init CallKeep Architecture...");
+      console.log("[Audio] Initializing...");
 
-      // 1. Headset (Safe)
-      try {
-          headsetService.setCommandCallback((source) => { 
-              if (source.includes('PHYSICAL_PTT')) {
-                  this.setTx(source === 'PHYSICAL_PTT_START');
-              } else {
-                  this.toggleVox();
-              }
-          });
-          headsetService.setConnectionCallback((isConnected, type) => this.forceAudioRouting(isConnected));
-          headsetService.init();
-      } catch (e) { console.warn("Headset init failed", e); }
+      // 1. HEADSET LISTENER
+      headsetService.setCommandCallback((source) => { this.toggleVox(); });
+      headsetService.setConnectionCallback((isConnected, type) => { this.handleRouteUpdate(isConnected, type); });
+      headsetService.init();
 
-      // 2. CallKeep (Critical)
+      // 2. CONFIG SYSTEME
+      // On wrap InCallManager dans un try/catch car il peut crash sur certains Androids
       try {
-          await this.setupCallKeep();
-      } catch (e) { console.warn("CallKeep init failed", e); }
+          InCallManager.start({ media: 'audio' }); 
+          InCallManager.setKeepScreenOn(true);
+          
+          if (!headsetService.isHeadsetConnected) {
+              InCallManager.setForceSpeakerphoneOn(true);
+          }
+      } catch (e) {
+          console.warn("[Audio] InCallManager start warning:", e);
+      }
 
-      // 3. Micro
+      // 3. MICRO
       try {
-        const stream = await mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: true, noiseSuppression: true, autoGainControl: true,
-                googEchoCancellation: true, googAutoGainControl: true, googNoiseSuppression: true, googHighpassFilter: true
-            },
-            video: false
-        }) as MediaStream;
+        const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
         this.setTx(false); 
-      } catch (e) { console.error("Micro Error", e); }
+      } catch (e) {
+        console.error("Micro Error (getUserMedia)", e);
+        return false; // Échec critique si pas de micro
+      }
 
-      // 4. Dummy Call
-      this.startDummyCall();
-
-      // 5. InCallManager
-      try {
-          InCallManager.start({ media: 'audio', auto: true, ringback: '' }); 
-          InCallManager.setKeepScreenOn(true);
-          InCallManager.setMicrophoneMute(false);
-          setTimeout(() => this.forceAudioRouting(headsetService.isHeadsetConnected), 1500);
-      } catch (e) { console.warn("InCallManager Error", e); }
-
+      // 4. MODULES SECONDAIRES
+      this.setupMusicControl();
       this.setupVox();
+      this.startKeepAlive();
+
       try { await VolumeManager.setVolume(0.8); } catch (e) {}
 
       this.isInitialized = true;
       return true;
     } catch (err) {
-      console.error("[Audio] Init FATAL Error:", err);
-      // On retourne false mais on ne crash pas l'app
+      console.error("[Audio] Init Error:", err);
       return false;
     }
   }
 
-  private async setupCallKeep() {
-      if (Platform.OS !== 'android') return;
-      try {
-          // On évite le crash si la permission n'est pas encore là
-          const hasPerm = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-          if (!hasPerm && Platform.Version >= 33) {
-              console.log("[CallKeep] Waiting for permissions...");
-              return;
-          }
-
-          await RNCallKeep.setup({
-              ios: { appName: 'ComTac' },
-              android: {
-                  alertTitle: 'Permissions',
-                  alertDescription: 'Gestion appel requise',
-                  cancelButton: 'Annuler',
-                  okButton: 'ok',
-                  imageName: 'ic_launcher', 
-                  additionalPermissions: [],
-                  foregroundService: {
-                      channelId: 'com.tactical.comtac',
-                      channelName: 'Radio Service',
-                      notificationTitle: 'ComTac Radio',
-                      notificationIcon: 'ic_launcher',
-                  },
-                  selfManaged: true 
-              },
-          });
-          RNCallKeep.setAvailable(true);
-          
-          RNCallKeep.addEventListener('answerCall', () => this.toggleVox());
-          RNCallKeep.addEventListener('endCall', () => this.startDummyCall());
-          RNCallKeep.addEventListener('didToggleMute', ({ mute }) => {
-              this.toggleVox();
-          });
-      } catch (e) { console.error("CallKeep Setup Failed", e); }
-  }
-
-  private startDummyCall() {
-      try {
-          this.currentCallId = uuid.v4() as string;
-          RNCallKeep.startCall(this.currentCallId, "ComTac", "ComTac", 'generic', false);
-          RNCallKeep.reportConnectedOutgoingCallWithUUID(this.currentCallId);
-          RNCallKeep.setMutedCall(this.currentCallId, false);
-      } catch (e) { console.warn("StartCall Error", e); }
-  }
-
-  private forceAudioRouting(isHeadset: boolean) {
-      try {
-          if(isHeadset) {
-              InCallManager.setForceSpeakerphoneOn(false);
-              InCallManager.setSpeakerphoneOn(false); 
-          } else {
-              InCallManager.setForceSpeakerphoneOn(true);
-              InCallManager.setSpeakerphoneOn(true);
-          }
-      } catch (e) {}
+  // ... (Reste du code identique)
+  private handleRouteUpdate(isConnected: boolean, type: string) {
+      console.log(`[Audio] Route: Headset=${isConnected} (${type})`);
+      if(isConnected) {
+          InCallManager.setForceSpeakerphoneOn(false); 
+          this.updateNotification(`Casque (${type})`);
+      } else {
+          InCallManager.setForceSpeakerphoneOn(true); 
+          this.updateNotification(`Haut-Parleur`);
+      }
+      setTimeout(() => this.refreshMediaFocus(), 500);
   }
 
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
@@ -145,25 +89,50 @@ class AudioService {
   }
   private notifyListeners() { this.listeners.forEach(cb => cb(this.mode)); }
 
-  toggleVox() {
-    if (this.isTx && this.mode === 'ptt') return;
-    this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
-    
-    try {
-        if (this.mode === 'vox') InCallManager.startRingtone('_BUNDLE_', [100]); 
-        else InCallManager.startRingtone('_BUNDLE_', [100, 50, 100]); 
-        setTimeout(() => InCallManager.stopRingtone(), 300);
-    } catch (e) {}
+  private setupMusicControl() {
+      if (Platform.OS !== 'android') return;
+      try {
+          MusicControl.stopControl();
+          MusicControl.enableBackgroundMode(true);
+          const commands = ['play', 'pause', 'stop', 'togglePlayPause', 'nextTrack', 'previousTrack'];
+          commands.forEach(cmd => MusicControl.enableControl(cmd as any, true));
+          MusicControl.enableControl('closeNotification', false, { when: 'never' });
+          commands.forEach(cmd => {
+            MusicControl.on(Command[cmd as keyof typeof Command], () => {
+                headsetService.triggerCommand('BLUETOOTH_AVRCP');
+            });
+          });
+          this.updateNotification('Prêt');
+      } catch (e) { console.log("MusicControl Error", e); }
+  }
 
+  private refreshMediaFocus() {
+      if (Platform.OS === 'android') {
+          MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING, elapsedTime: 0 });
+      }
+  }
+
+  toggleVox() {
+    this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
-    
-    if (this.currentCallId) {
-        try { RNCallKeep.setMutedCall(this.currentCallId, this.mode === 'ptt'); } catch(e) {}
-    }
+    this.updateNotification();
     this.notifyListeners();
+  }
+
+  updateNotification(extraInfo?: string) {
+      const isVox = this.mode === 'vox';
+      MusicControl.setNowPlaying({
+          title: `Radio Tactique`,
+          artist: isVox ? 'VOX ON (Parlez)' : 'PTT (Appuyez)',
+          album: extraInfo || (isVox ? 'Micro Ouvert' : 'En attente'), 
+          duration: 0, 
+          color: isVox ? 0xFFef4444 : 0xFF3b82f6,
+          isPlaying: true, 
+          notificationIcon: 'ic_launcher' 
+      });
   }
 
   private setupVox() {
@@ -179,20 +148,31 @@ class AudioService {
       } catch (e) {}
   }
 
-  private startKeepAlive() {}
+  private startKeepAlive() {
+      if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = setInterval(() => { this.refreshMediaFocus(); }, 15000);
+  }
 
   setTx(state: boolean) {
     if (this.isTx === state) return;
     this.isTx = state;
     if (this.stream) this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
+    if(this.mode === 'vox') this.updateNotification();
   }
   
+  // Fonction pour mute le son entrant (quand on parle en PTT)
+  muteIncoming(mute: boolean) {
+      // TODO: Implémenter si on stocke les remoteStreams
+  }
+  
+  playStream(remoteStream: MediaStream) {
+       // TODO: Implémenter le stockage des streams
+  }
+
   startMetering(callback: (level: number) => void) {
+      // Simulation simple pour l'UI, RNSoundLevel fait le vrai travail pour le VOX
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
-  
-  muteIncoming(mute: boolean) {}
-  playStream(remoteStream: MediaStream) {}
 }
 
 export const audioService = new AudioService();
