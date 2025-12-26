@@ -1,7 +1,6 @@
 import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 
-// AJOUT DE KEYCODE_MUTE (91)
 const KEY_CODES = {
     VOLUME_UP: 24, 
     VOLUME_DOWN: 25, 
@@ -12,7 +11,7 @@ const KEY_CODES = {
     MEDIA_PLAY: 126, 
     MEDIA_PAUSE: 127, 
     MEDIA_STOP: 86,
-    MUTE: 91 // Souvent utilisé par le bouton dédié des casques pro
+    MUTE: 91
 };
 
 type CommandCallback = (source: string) => void;
@@ -46,7 +45,7 @@ class HeadsetService {
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
     public setConnectionCallback(callback: ConnectionCallback) { this.onConnectionChange = callback; }
 
-    // --- 1. DÉTECTION AUDIO SÉCURISÉE ---
+    // --- 1. DÉTECTION AUDIO ---
     private setupConnectionListener() {
         if (NativeModules.InCallManager) {
             this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
@@ -60,9 +59,11 @@ class HeadsetService {
 
                 const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
                 
-                // Liste élargie pour compatibilité
+                // On détecte explicitement tout ce qui n'est pas le HP ou le téléphone
                 const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece', 'Headset', 'CarAudio', 'USB_HEADSET', 'AuxLine'];
                 const connected = headsetTypes.some(t => current.includes(t)) && current !== 'Speaker' && current !== 'Phone';
+
+                console.log("[HeadsetService] Device changed:", current, "Connected:", connected);
 
                 this.isHeadsetConnected = connected;
                 if (this.onConnectionChange) this.onConnectionChange(connected, current);
@@ -74,10 +75,10 @@ class HeadsetService {
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                // On ignore Vol Down (bruit)
+                // On ignore Vol Down
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
 
-                // Gestion Double Vol Up
+                // Double Volume Up Logic
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
                     const now = Date.now();
                     if (now - this.lastVolumeUpTime < 400) {
@@ -89,6 +90,9 @@ class HeadsetService {
                     return;
                 }
 
+                // Pour toutes les autres touches (Mute, Play, Next...)
+                // Comme on retourne TRUE dans le Java, l'action par défaut (changer piste) est annulée
+                // et on arrive ici.
                 const validKeys = Object.values(KEY_CODES);
                 if (validKeys.includes(keyEvent.keyCode)) {
                     this.triggerCommand(`KEY_${keyEvent.keyCode}`);
@@ -99,8 +103,7 @@ class HeadsetService {
 
     public triggerCommand(source: string) {
         const now = Date.now();
-        // Debounce pour éviter qu'un appui long lance 50 commandes
-        if (now - this.lastCommandTime < 400) return;
+        if (now - this.lastCommandTime < 300) return; // Debounce
 
         this.lastCommandTime = now;
         if (this.onCommand) this.onCommand(source);
