@@ -85,7 +85,6 @@ module.exports = function(config) {
   );
 };
 
-// --- FIX CALLKEEP ---
 function withCallKeepManifestFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
@@ -115,7 +114,6 @@ function withCallKeepManifestFix(config) {
   });
 }
 
-// --- INJECTION KOTLIN ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -173,7 +171,6 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- SERVICE ACCESSIBILITÉ (CORRECTION : CONSUMER TOUS LES ÉVÉNEMENTS) ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -205,7 +202,7 @@ function withAccessibilityService(config) {
         const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
         if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
         
-        // C'EST ICI QUE JE MODIFIE LE CODE JAVA POUR RENVOYER TRUE (Consommé)
+        // MODIFICATION CRITIQUE ICI
         const javaContent = `package com.tactical.comtac;
 import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;
@@ -222,7 +219,8 @@ public class ComTacAccessibilityService extends AccessibilityService {
         int keyCode = event.getKeyCode();
         
         if (action == KeyEvent.ACTION_DOWN) {
-            // Liste des touches interceptées
+            boolean isMediaKey = false;
+            
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
                 keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
@@ -230,15 +228,23 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || 
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE ||
-                keyCode == KeyEvent.KEYCODE_MUTE) { // Ajout MUTE
+                keyCode == KeyEvent.KEYCODE_MEDIA_STOP ||
+                keyCode == KeyEvent.KEYCODE_MUTE) {
                 
+                isMediaKey = true;
+            }
+
+            if (isMediaKey) {
+                // 1. On envoie l'info à React Native
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
                 
-                // IMPORTANT : On retourne TRUE pour TOUTES ces touches
-                // Cela dit au système "C'est bon, j'ai géré, ne fais rien d'autre"
-                // Empêche le changement de piste, le lancement de Spotify, ou le changement de sortie audio
+                // 2. CRITIQUE : On retourne TRUE pour TOUT ce qui est média/casque
+                // Cela empêche Android de traiter l'événement et donc de changer la sortie audio
+                // Exception : On laisse passer Volume Up pour monter le son du système quand même si besoin
+                // Mais pour Next/Prev/Hook, on bloque absolument.
+                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) return false; 
                 return true; 
             }
         }
