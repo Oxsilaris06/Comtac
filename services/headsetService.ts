@@ -32,37 +32,28 @@ class HeadsetService {
 
     public init() {
         this.cleanup();
-        
-        // 1. SETUP MUSIC CONTROL (Media Session)
-        this.setupMusicControl();
-
-        // 2. SETUP ACCESSIBILITY (Backup)
-        this.setupKeyEventListener();
-        
-        // 3. SETUP AUDIO DETECTION
+        this.setupMusicControl(); // PRIMARY LISTENER
+        this.setupKeyEventListener(); // BACKUP LISTENER
         this.setupConnectionListener();
     }
 
     private setupMusicControl() {
         MusicControl.enableBackgroundMode(true);
         
-        // On active tous les contrôles
         MusicControl.enableControl('play', true);
         MusicControl.enableControl('pause', true);
-        MusicControl.enableControl('stop', true);
+        MusicControl.enableControl('stop', false);
         MusicControl.enableControl('nextTrack', true);
         MusicControl.enableControl('previousTrack', true);
         
-        // On définit un état fictif pour forcer l'affichage et la prise de focus
         MusicControl.setNowPlaying({
             title: 'ComTac Radio',
             artwork: require('../assets/icon.png'), 
-            artist: 'PTT Actif',
+            artist: 'Contrôle PTT Actif',
             color: 0x3b82f6,
             notificationIcon: 'ic_launcher'
         });
 
-        // Les listeners qui transforment la musique en PTT
         MusicControl.on(Command.play, () => { 
             MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
             this.triggerCommand('MEDIA_PLAY'); 
@@ -75,9 +66,8 @@ class HeadsetService {
         
         MusicControl.on(Command.nextTrack, () => this.triggerCommand('MEDIA_NEXT'));
         MusicControl.on(Command.previousTrack, () => this.triggerCommand('MEDIA_PREV'));
-        MusicControl.on(Command.stop, () => this.triggerCommand('MEDIA_STOP'));
         
-        // Force l'état Playing pour garder le focus
+        // On force l'état Playing pour garder le focus
         MusicControl.updatePlayback({
             state: MusicControl.STATE_PLAYING,
             elapsedTime: 0
@@ -90,7 +80,6 @@ class HeadsetService {
             this.subscription = null;
         }
         KeyEvent.removeKeyDownListener();
-        // On ne coupe pas MusicControl ici, on le laisse survivre
     }
 
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
@@ -120,10 +109,8 @@ class HeadsetService {
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                // Ignore Vol Down
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
 
-                // Double Volume Up Logic
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
                     const now = Date.now();
                     if (now - this.lastVolumeUpTime < 400) {
@@ -145,9 +132,7 @@ class HeadsetService {
 
     public triggerCommand(source: string) {
         const now = Date.now();
-        // Debounce
         if (now - this.lastCommandTime < 300) return;
-
         this.lastCommandTime = now;
         if (this.onCommand) this.onCommand(source);
     }
