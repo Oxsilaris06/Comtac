@@ -1,6 +1,8 @@
 import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription, DeviceEventEmitter } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 
+const { HeadsetModule } = NativeModules;
+
 const KEY_CODES = {
     VOLUME_UP: 24, 
     VOLUME_DOWN: 25, 
@@ -32,8 +34,15 @@ class HeadsetService {
 
     public init() {
         this.cleanup();
-        this.setupKeyEventListener(); // Via Accessibility Service
-        this.setupMediaSessionListener(); // Via Native Media Module
+        
+        // 1. Démarrer le Module Natif (MediaSession)
+        if (HeadsetModule && HeadsetModule.startSession) {
+            console.log("[Headset] Starting Native Media Session");
+            HeadsetModule.startSession();
+        }
+
+        this.setupKeyEventListener(); // Via Accessibility (Backup)
+        this.setupMediaSessionListener(); // Via HeadsetModule (Prioritaire)
         this.setupConnectionListener();
     }
 
@@ -47,6 +56,9 @@ class HeadsetService {
             this.mediaSubscription = null;
         }
         KeyEvent.removeKeyDownListener();
+        
+        // Arrêt propre du module natif si besoin (optionnel, on veut souvent le garder actif)
+        // if (HeadsetModule) HeadsetModule.stopSession();
     }
 
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
@@ -73,15 +85,16 @@ class HeadsetService {
         }
     }
 
-    // --- ECOUTEUR 1 : MediaSession Natif (Nouveau) ---
+    // --- ECOUTEUR 1 : Native HeadsetModule (MediaSession) ---
     private setupMediaSessionListener() {
         this.mediaSubscription = DeviceEventEmitter.addListener('COMTAC_MEDIA_EVENT', (keyCode: number) => {
-            console.log("[Headset] Media Event received:", keyCode);
+            console.log("[Headset] Native Media Event received:", keyCode);
+            // On traite l'événement immédiatement
             this.processKeyCode(keyCode, 'MEDIA_SESSION');
         });
     }
 
-    // --- ECOUTEUR 2 : Accessibility Service (Ancien) ---
+    // --- ECOUTEUR 2 : Accessibility Service (Backup) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
@@ -114,7 +127,6 @@ class HeadsetService {
 
     public triggerCommand(source: string) {
         const now = Date.now();
-        // Debounce unifié pour éviter les doublons si les deux systèmes (Accessibilité + Media) détectent la touche
         if (now - this.lastCommandTime < 300) return;
 
         this.lastCommandTime = now;
