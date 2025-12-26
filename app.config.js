@@ -115,6 +115,8 @@ function withHeadsetModule(config) {
       const moduleContent = `package com.tactical.comtac;
 
 import android.content.Intent;
+import android.content.Context;
+import android.media.AudioManager;
 import android.view.KeyEvent;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
@@ -126,10 +128,12 @@ import com.facebook.react.modules.core.DeviceEventManagerModule;
 public class HeadsetModule extends ReactContextBaseJavaModule {
     private static MediaSessionCompat mediaSession;
     private final ReactApplicationContext reactContext;
+    private AudioManager audioManager;
 
     public HeadsetModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
+        this.audioManager = (AudioManager) reactContext.getSystemService(Context.AUDIO_SERVICE);
     }
 
     @Override
@@ -142,15 +146,26 @@ public class HeadsetModule extends ReactContextBaseJavaModule {
         if (mediaSession != null) return;
 
         try {
+            // 1. Demander AudioFocus (CRUCIAL POUR RECEVOIR LES BOUTONS)
+            // On demande le focus "Musique" pour voler la priorité bouton
+            int result = audioManager.requestAudioFocus(
+                focusChange -> {}, // Listener simple
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN
+            );
+
+            if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                // Focus refusé, mais on continue quand même l'init au cas où
+            }
+
+            // 2. Création Session
             mediaSession = new MediaSessionCompat(reactContext, "ComTacSession");
             
-            // On déclare qu'on gère TOUT pour essayer de voler la priorité à CallKeep
             mediaSession.setFlags(
                 MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS | 
                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
             );
 
-            // On simule une lecture active (Buffering permet de garder le focus sans jouer de son)
             PlaybackStateCompat state = new PlaybackStateCompat.Builder()
                 .setActions(
                     PlaybackStateCompat.ACTION_PLAY | 
@@ -195,6 +210,9 @@ public class HeadsetModule extends ReactContextBaseJavaModule {
             mediaSession.setActive(false);
             mediaSession.release();
             mediaSession = null;
+            if (audioManager != null) {
+                audioManager.abandonAudioFocus(null);
+            }
         }
     }
 }`;
@@ -235,9 +253,6 @@ public class HeadsetPackage implements ReactPackage {
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
-    // Ajout du Package dans MainApplication (pas MainActivity cette fois, car c'est un Package)
-    // Note: Expo gère cela automatiquement si c'est un vrai module npm, mais ici c'est manuel
-    // Astuce: On va utiliser le hook MainApplication d'Expo
     return config;
   });
 }
@@ -257,9 +272,6 @@ function withCallKeepManifestFix(config) {
     connectionService.$['android:exported'] = 'true';
     connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
     
-    // IMPORTANT: On supprime l'IntentFilter de CallKeep pour MEDIA_BUTTON s'il existe
-    // pour éviter qu'il ne vole la priorité à notre Module
-    
     const bgServiceName = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
     let bgService = mainApplication['service']?.find(s => s.$['android:name'] === bgServiceName);
     if (!bgService) {
@@ -272,7 +284,6 @@ function withCallKeepManifestFix(config) {
 }
 
 // --- ENREGISTREMENT MANUEL DU PACKAGE (Hook dangerousMod sur MainApplication.kt/java) ---
-// C'est l'étape délicate avec Expo Prebuild : ajouter le package à la liste
 function withMainActivityInjection(config) {
     return withDangerousMod(config, [
         'android',
@@ -283,7 +294,6 @@ function withMainActivityInjection(config) {
             if (fs.existsSync(appPath)) {
                 let content = fs.readFileSync(appPath, 'utf8');
                 if (!content.includes('new HeadsetPackage()') && !content.includes('HeadsetPackage()')) {
-                    // Injection barbare mais efficace pour Expo
                     if (isKotlin) {
                         content = content.replace('PackageList(this).packages', 'PackageList(this).packages.apply { add(HeadsetPackage()) }');
                     } else {
