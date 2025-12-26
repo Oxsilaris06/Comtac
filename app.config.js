@@ -1,90 +1,107 @@
-const { withAndroidManifest, withMainActivity, withDangerousMod, withStringsXml } = require('@expo/config-plugins');
+const { withAndroidManifest, withMainActivity, withDangerousMod, withStringsXml, withAppBuildGradle } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
-  return withCallKeepManifestFix(
-    withAccessibilityService(
-      withKeyEventBuildGradleFix(
-        withMainActivityInjection(
-          {
-            name: "COM TAC v14",
-            slug: "comtac-v14",
-            version: "1.0.0",
-            orientation: "portrait",
-            icon: "./assets/icon.png",
-            userInterfaceStyle: "light",
-            splash: {
-              image: "./assets/splash.png",
-              resizeMode: "contain",
-              backgroundColor: "#000000"
-            },
-            assetBundlePatterns: ["**/*"],
-            ios: {
-              supportsTablet: true,
-              infoPlist: {
-                UIBackgroundModes: ["audio", "voip", "fetch"]
-              }
-            },
-            android: {
-              adaptiveIcon: {
-                foregroundImage: "./assets/adaptive-icon.png",
+  return withMediaSessionGradle(
+    withCallKeepManifestFix(
+      withAccessibilityService(
+        withKeyEventBuildGradleFix(
+          withMainActivityInjection(
+            {
+              name: "COM TAC v14",
+              slug: "comtac-v14",
+              version: "1.0.0",
+              orientation: "portrait",
+              icon: "./assets/icon.png",
+              userInterfaceStyle: "light",
+              splash: {
+                image: "./assets/splash.png",
+                resizeMode: "contain",
                 backgroundColor: "#000000"
               },
-              package: "com.tactical.comtac",
-              permissions: [
-                "android.permission.INTERNET",
-                "android.permission.ACCESS_NETWORK_STATE",
-                "android.permission.CAMERA",
-                "android.permission.RECORD_AUDIO",
-                "android.permission.ACCESS_FINE_LOCATION",
-                "android.permission.ACCESS_COARSE_LOCATION",
-                "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-                "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-                "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
-                "android.permission.WAKE_LOCK",
-                "android.permission.BATTERY_STATS",
-                "android.permission.SYSTEM_ALERT_WINDOW",
-                "android.permission.REORDER_TASKS",
-                "android.permission.BLUETOOTH",
-                "android.permission.BLUETOOTH_CONNECT",
-                "android.permission.BLUETOOTH_SCAN",
-                "android.permission.MODIFY_AUDIO_SETTINGS",
-                "android.permission.ACTIVITY_RECOGNITION",
-                "android.permission.BIND_ACCESSIBILITY_SERVICE",
-                "android.permission.MANAGE_OWN_CALLS",
-                "android.permission.READ_PHONE_STATE",
-                "android.permission.CALL_PHONE",
-                "android.permission.POST_NOTIFICATIONS" 
-              ]
-            },
-            plugins: [
-              ["expo-camera", { cameraPermission: "Allow camera", microphonePermission: "Allow mic" }],
-              ["expo-location", { locationAlwaysAndWhenInUsePermission: "Allow location" }],
-              [
-                "expo-build-properties", 
-                { 
-                  android: { 
-                    minSdkVersion: 24, 
-                    compileSdkVersion: 34, 
-                    buildToolsVersion: "34.0.0",
-                    targetSdkVersion: 33 
-                  },
-                  ios: {
-                    deploymentTarget: "13.4"
-                  }
+              assetBundlePatterns: ["**/*"],
+              ios: {
+                supportsTablet: true,
+                infoPlist: {
+                  UIBackgroundModes: ["audio", "voip", "fetch"]
                 }
-              ],
-              "@config-plugins/react-native-webrtc"
-            ]
-          }
+              },
+              android: {
+                adaptiveIcon: {
+                  foregroundImage: "./assets/adaptive-icon.png",
+                  backgroundColor: "#000000"
+                },
+                package: "com.tactical.comtac",
+                permissions: [
+                  "android.permission.INTERNET",
+                  "android.permission.ACCESS_NETWORK_STATE",
+                  "android.permission.CAMERA",
+                  "android.permission.RECORD_AUDIO",
+                  "android.permission.ACCESS_FINE_LOCATION",
+                  "android.permission.ACCESS_COARSE_LOCATION",
+                  "android.permission.FOREGROUND_SERVICE",
+                  "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+                  "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+                  "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+                  "android.permission.WAKE_LOCK",
+                  "android.permission.BATTERY_STATS",
+                  "android.permission.SYSTEM_ALERT_WINDOW",
+                  "android.permission.REORDER_TASKS",
+                  "android.permission.BLUETOOTH",
+                  "android.permission.BLUETOOTH_CONNECT",
+                  "android.permission.BLUETOOTH_SCAN",
+                  "android.permission.MODIFY_AUDIO_SETTINGS",
+                  "android.permission.ACTIVITY_RECOGNITION",
+                  "android.permission.BIND_ACCESSIBILITY_SERVICE",
+                  "android.permission.MANAGE_OWN_CALLS",
+                  "android.permission.READ_PHONE_STATE",
+                  "android.permission.CALL_PHONE",
+                  "android.permission.POST_NOTIFICATIONS" 
+                ]
+              },
+              plugins: [
+                ["expo-camera", { cameraPermission: "Allow camera", microphonePermission: "Allow mic" }],
+                ["expo-location", { locationAlwaysAndWhenInUsePermission: "Allow location" }],
+                [
+                  "expo-build-properties", 
+                  { 
+                    android: { 
+                      minSdkVersion: 24, 
+                      compileSdkVersion: 34, 
+                      buildToolsVersion: "34.0.0",
+                      targetSdkVersion: 33 
+                    },
+                    ios: {
+                      deploymentTarget: "13.4"
+                    }
+                  }
+                ],
+                "@config-plugins/react-native-webrtc"
+              ]
+            }
+          )
         )
       )
     )
   );
 };
 
+// --- NOUVEAU : AJOUT DÉPENDANCE ANDROIDX MEDIA ---
+function withMediaSessionGradle(config) {
+  return withAppBuildGradle(config, config => {
+      if (!config.modResults.contents.includes("androidx.media:media")) {
+          config.modResults.contents = config.modResults.contents.replace(
+              /dependencies\s*{/,
+              `dependencies {
+    implementation 'androidx.media:media:1.6.0'`
+          );
+      }
+      return config;
+  });
+}
+
+// --- FIX CALLKEEP ---
 function withCallKeepManifestFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
@@ -98,11 +115,14 @@ function withCallKeepManifestFix(config) {
     connectionService.$['android:permission'] = 'android.permission.BIND_TELECOM_CONNECTION_SERVICE';
     connectionService.$['android:exported'] = 'true';
     connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
+    
+    // Ajout Intent Filter pour Media Button Receiver au cas où
     if (!connectionService['intent-filter']) {
         connectionService['intent-filter'] = [{
             action: [{ $: { 'android:name': 'android.telecom.ConnectionService' } }]
         }];
     }
+    
     const bgServiceName = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
     let bgService = mainApplication['service']?.find(s => s.$['android:name'] === bgServiceName);
     if (!bgService) {
@@ -114,56 +134,92 @@ function withCallKeepManifestFix(config) {
   });
 }
 
+// --- INJECTION DU MODULE NATIF DANS MAIN ACTIVITY ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
     const isKotlin = src.includes('class MainActivity') && src.includes('.kt');
+
     if (isKotlin) {
+      // 1. Imports nécessaires
       const importsToAdd = [
-        'import android.content.Intent', 'import android.content.IntentFilter',
-        'import android.content.BroadcastReceiver', 'import android.content.Context',
-        'import android.view.KeyEvent', 'import com.github.kevinejohn.keyevent.KeyEventModule'
+        'import android.content.Intent',
+        'import android.view.KeyEvent',
+        'import android.support.v4.media.session.MediaSessionCompat',
+        'import android.support.v4.media.session.PlaybackStateCompat',
+        'import com.facebook.react.modules.core.DeviceEventManagerModule',
+        'import android.os.Bundle'
       ];
+
       if (src.includes('package com.tactical.comtac')) {
          const packageLine = 'package com.tactical.comtac';
          let importsBlock = "";
          importsToAdd.forEach(imp => { if (!src.includes(imp)) importsBlock += `\n${imp}`; });
          if (importsBlock.length > 0) src = src.replace(packageLine, `${packageLine}${importsBlock}`);
       }
-      if (!src.includes('private val comTacReceiver')) {
-        const lastBrace = src.lastIndexOf('}');
-        const codeToInject = `
-  private val comTacReceiver = object : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-      if ("COMTAC_HARDWARE_EVENT" == intent.action) {
-        val keyCode = intent.getIntExtra("keyCode", 0)
-        if (KeyEventModule.getInstance() != null) {
-            KeyEventModule.getInstance().onKeyDownEvent(keyCode, null)
+
+      // 2. Définition de la variable MediaSession
+      if (!src.includes('private var mediaSession: MediaSessionCompat?')) {
+        const classStart = src.indexOf('class MainActivity');
+        const braceIndex = src.indexOf('{', classStart);
+        if (braceIndex > -1) {
+            src = src.slice(0, braceIndex + 1) + 
+                  `\n  private var mediaSession: MediaSessionCompat? = null` + 
+                  src.slice(braceIndex + 1);
         }
       }
+
+      // 3. Initialisation dans onCreate
+      const sessionSetupCode = `
+    // --- COMTAC MEDIA SESSION START ---
+    try {
+        mediaSession = MediaSessionCompat(this, "ComTacMediaSession")
+        
+        mediaSession?.setFlags(
+            MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or 
+            MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+        )
+        
+        val state = PlaybackStateCompat.Builder()
+            .setActions(
+                PlaybackStateCompat.ACTION_PLAY or 
+                PlaybackStateCompat.ACTION_PAUSE or 
+                PlaybackStateCompat.ACTION_PLAY_PAUSE or 
+                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or 
+                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+            )
+            .setState(PlaybackStateCompat.STATE_PLAYING, 0, 1f)
+            .build()
+            
+        mediaSession?.setPlaybackState(state)
+        
+        mediaSession?.setCallback(object : MediaSessionCompat.Callback() {
+            override fun onMediaButtonEvent(mediaButtonEvent: Intent?): Boolean {
+                val keyEvent = mediaButtonEvent?.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
+                if (keyEvent != null && keyEvent.action == KeyEvent.ACTION_DOWN) {
+                    val reactContext = reactInstanceManager.currentReactContext
+                    if (reactContext != null) {
+                        reactContext
+                            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                            .emit("COMTAC_MEDIA_EVENT", keyEvent.keyCode)
+                    }
+                    return true // CONSUMED: Bloque le système
+                }
+                return super.onMediaButtonEvent(mediaButtonEvent)
+            }
+        })
+        
+        mediaSession?.isActive = true
+    } catch (e: Exception) {
+        e.printStackTrace()
     }
-  }
-  override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-    if (event.action == KeyEvent.ACTION_DOWN) {
-       if (KeyEventModule.getInstance() != null) {
-           KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
-       }
-    }
-    return super.dispatchKeyEvent(event)
-  }
+    // --- COMTAC MEDIA SESSION END ---
 `;
-        src = src.substring(0, lastBrace) + codeToInject + src.substring(lastBrace);
-      }
-      const registerCode = `
-    val filter = IntentFilter("COMTAC_HARDWARE_EVENT")
-    if (android.os.Build.VERSION.SDK_INT >= 34) {
-        registerReceiver(comTacReceiver, filter, Context.RECEIVER_EXPORTED)
-    } else {
-        registerReceiver(comTacReceiver, filter)
-    }
-`;
-      if (src.includes('super.onCreate(null)') && !src.includes('registerReceiver(comTacReceiver')) {
-           src = src.replace('super.onCreate(null)', `super.onCreate(null)\n${registerCode}`);
+
+      if (src.includes('super.onCreate(null)')) {
+           if (!src.includes('ComTacMediaSession')) {
+               src = src.replace('super.onCreate(null)', `super.onCreate(null)\n${sessionSetupCode}`);
+           }
       }
     }
     config.modResults.contents = src;
@@ -171,6 +227,7 @@ function withMainActivityInjection(config) {
   });
 }
 
+// --- KEEP ACCESSIBILITY AS BACKUP ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -201,8 +258,6 @@ function withAccessibilityService(config) {
     async (config) => {
         const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
         if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
-        
-        // MODIFICATION CRITIQUE ICI
         const javaContent = `package com.tactical.comtac;
 import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;
@@ -217,34 +272,18 @@ public class ComTacAccessibilityService extends AccessibilityService {
     protected boolean onKeyEvent(KeyEvent event) {
         int action = event.getAction();
         int keyCode = event.getKeyCode();
-        
         if (action == KeyEvent.ACTION_DOWN) {
-            boolean isMediaKey = false;
-            
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
                 keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_NEXT ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || 
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
-                keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE ||
-                keyCode == KeyEvent.KEYCODE_MEDIA_STOP ||
+                keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE || 
                 keyCode == KeyEvent.KEYCODE_MUTE) {
-                
-                isMediaKey = true;
-            }
-
-            if (isMediaKey) {
-                // 1. On envoie l'info à React Native
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
-                
-                // 2. CRITIQUE : On retourne TRUE pour TOUT ce qui est média/casque
-                // Cela empêche Android de traiter l'événement et donc de changer la sortie audio
-                // Exception : On laisse passer Volume Up pour monter le son du système quand même si besoin
-                // Mais pour Next/Prev/Hook, on bloque absolument.
-                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) return false; 
                 return true; 
             }
         }
