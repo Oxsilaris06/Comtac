@@ -1,12 +1,18 @@
-
 import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
-import { VolumeManager } from 'react-native-volume-manager';
 
+// AJOUT DE KEYCODE_MUTE (91)
 const KEY_CODES = {
-    VOLUME_UP: 24, VOLUME_DOWN: 25, HEADSET_HOOK: 79,     
-    MEDIA_PLAY_PAUSE: 85, MEDIA_NEXT: 87, MEDIA_PREVIOUS: 88,
-    MEDIA_PLAY: 126, MEDIA_PAUSE: 127, MEDIA_STOP: 86
+    VOLUME_UP: 24, 
+    VOLUME_DOWN: 25, 
+    HEADSET_HOOK: 79,     
+    MEDIA_PLAY_PAUSE: 85, 
+    MEDIA_NEXT: 87, 
+    MEDIA_PREVIOUS: 88,
+    MEDIA_PLAY: 126, 
+    MEDIA_PAUSE: 127, 
+    MEDIA_STOP: 86,
+    MUTE: 91 // Souvent utilisé par le bouton dédié des casques pro
 };
 
 type CommandCallback = (source: string) => void;
@@ -25,7 +31,7 @@ class HeadsetService {
     constructor() {}
 
     public init() {
-        this.cleanup(); // Évite les doublons de listeners
+        this.cleanup();
         this.setupKeyEventListener();
         this.setupConnectionListener();
     }
@@ -46,7 +52,6 @@ class HeadsetService {
             this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
             
             this.subscription = this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
-                // FIX CRITIQUE: Gestion robuste du format de données (String vs Objet)
                 let deviceObj = data;
                 if (typeof data === 'string') {
                     try { deviceObj = JSON.parse(data); } catch (e) { return; }
@@ -55,7 +60,7 @@ class HeadsetService {
 
                 const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
                 
-                // Liste élargie pour compatibilité USB/Auto
+                // Liste élargie pour compatibilité
                 const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece', 'Headset', 'CarAudio', 'USB_HEADSET', 'AuxLine'];
                 const connected = headsetTypes.some(t => current.includes(t)) && current !== 'Speaker' && current !== 'Phone';
 
@@ -69,14 +74,15 @@ class HeadsetService {
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
+                // On ignore Vol Down (bruit)
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
 
+                // Gestion Double Vol Up
                 if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
                     const now = Date.now();
                     if (now - this.lastVolumeUpTime < 400) {
                         this.triggerCommand('DOUBLE_VOL_UP');
                         this.lastVolumeUpTime = 0;
-                        // RETRAIT DU setVolume(1.0) DANGEREUX
                     } else {
                         this.lastVolumeUpTime = now;
                     }
@@ -93,8 +99,8 @@ class HeadsetService {
 
     public triggerCommand(source: string) {
         const now = Date.now();
-        // Debounce optimisé à 250ms
-        if (now - this.lastCommandTime < 250) return;
+        // Debounce pour éviter qu'un appui long lance 50 commandes
+        if (now - this.lastCommandTime < 400) return;
 
         this.lastCommandTime = now;
         if (this.onCommand) this.onCommand(source);
