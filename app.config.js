@@ -35,36 +35,27 @@ module.exports = function(config) {
               permissions: [
                 "android.permission.INTERNET",
                 "android.permission.ACCESS_NETWORK_STATE",
-                // CAMERA & MICRO
                 "android.permission.CAMERA",
                 "android.permission.RECORD_AUDIO",
-                // LOCALISATION
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
-                // SERVICES FOREGROUND
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                 "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
-                // SYSTÈME
                 "android.permission.WAKE_LOCK",
                 "android.permission.BATTERY_STATS",
                 "android.permission.SYSTEM_ALERT_WINDOW",
                 "android.permission.REORDER_TASKS",
-                // BLUETOOTH (Appareils à proximité)
                 "android.permission.BLUETOOTH",
                 "android.permission.BLUETOOTH_CONNECT",
-                "android.permission.BLUETOOTH_SCAN", // AJOUT
+                "android.permission.BLUETOOTH_SCAN",
                 "android.permission.MODIFY_AUDIO_SETTINGS",
-                // ACTIVITÉ PHYSIQUE (AJOUT)
                 "android.permission.ACTIVITY_RECOGNITION",
-                // ACCESSIBILITÉ
                 "android.permission.BIND_ACCESSIBILITY_SERVICE",
-                // TÉLÉPHONE (CallKeep)
                 "android.permission.MANAGE_OWN_CALLS",
                 "android.permission.READ_PHONE_STATE",
                 "android.permission.CALL_PHONE",
-                // NOTIFICATIONS
                 "android.permission.POST_NOTIFICATIONS" 
               ]
             },
@@ -94,33 +85,25 @@ module.exports = function(config) {
   );
 };
 
-// --- FIX CRITIQUE ANDROID 14 (CallKeep SecurityException) ---
+// --- FIX CALLKEEP ---
 function withCallKeepManifestFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
-    
-    // 1. VoiceConnectionService
     const connectionServiceName = 'io.wazo.callkeep.VoiceConnectionService';
     let connectionService = mainApplication['service']?.find(s => s.$['android:name'] === connectionServiceName);
-    
     if (!connectionService) {
         connectionService = { $: { 'android:name': connectionServiceName } };
         if (!mainApplication['service']) mainApplication['service'] = [];
         mainApplication['service'].push(connectionService);
     }
-    
-    // INJECTION DES ATTRIBUTS DE SÉCURITÉ OBLIGATOIRES
     connectionService.$['android:permission'] = 'android.permission.BIND_TELECOM_CONNECTION_SERVICE';
     connectionService.$['android:exported'] = 'true';
     connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
-
     if (!connectionService['intent-filter']) {
         connectionService['intent-filter'] = [{
             action: [{ $: { 'android:name': 'android.telecom.ConnectionService' } }]
         }];
     }
-
-    // 2. RNCallKeepBackgroundMessagingService
     const bgServiceName = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
     let bgService = mainApplication['service']?.find(s => s.$['android:name'] === bgServiceName);
     if (!bgService) {
@@ -128,42 +111,30 @@ function withCallKeepManifestFix(config) {
         mainApplication['service'].push(bgService);
     }
     bgService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
-    
     return config;
   });
 }
 
-// --- PLUGIN 1 : INJECTION KOTLIN ---
+// --- INJECTION KOTLIN ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
     const isKotlin = src.includes('class MainActivity') && src.includes('.kt');
-
     if (isKotlin) {
       const importsToAdd = [
-        'import android.content.Intent',
-        'import android.content.IntentFilter',
-        'import android.content.BroadcastReceiver',
-        'import android.content.Context',
-        'import android.view.KeyEvent',
-        'import com.github.kevinejohn.keyevent.KeyEventModule'
+        'import android.content.Intent', 'import android.content.IntentFilter',
+        'import android.content.BroadcastReceiver', 'import android.content.Context',
+        'import android.view.KeyEvent', 'import com.github.kevinejohn.keyevent.KeyEventModule'
       ];
-
       if (src.includes('package com.tactical.comtac')) {
          const packageLine = 'package com.tactical.comtac';
          let importsBlock = "";
-         importsToAdd.forEach(imp => {
-             if (!src.includes(imp)) importsBlock += `\n${imp}`;
-         });
-         if (importsBlock.length > 0) {
-             src = src.replace(packageLine, `${packageLine}${importsBlock}`);
-         }
+         importsToAdd.forEach(imp => { if (!src.includes(imp)) importsBlock += `\n${imp}`; });
+         if (importsBlock.length > 0) src = src.replace(packageLine, `${packageLine}${importsBlock}`);
       }
-
       if (!src.includes('private val comTacReceiver')) {
         const lastBrace = src.lastIndexOf('}');
         const codeToInject = `
-  // --- COMTAC INJECTION START ---
   private val comTacReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
       if ("COMTAC_HARDWARE_EVENT" == intent.action) {
@@ -174,7 +145,6 @@ function withMainActivityInjection(config) {
       }
     }
   }
-
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
     if (event.action == KeyEvent.ACTION_DOWN) {
        if (KeyEventModule.getInstance() != null) {
@@ -183,11 +153,9 @@ function withMainActivityInjection(config) {
     }
     return super.dispatchKeyEvent(event)
   }
-  // --- COMTAC INJECTION END ---
 `;
         src = src.substring(0, lastBrace) + codeToInject + src.substring(lastBrace);
       }
-
       const registerCode = `
     val filter = IntentFilter("COMTAC_HARDWARE_EVENT")
     if (android.os.Build.VERSION.SDK_INT >= 34) {
@@ -196,10 +164,8 @@ function withMainActivityInjection(config) {
         registerReceiver(comTacReceiver, filter)
     }
 `;
-      if (src.includes('super.onCreate(null)')) {
-           if (!src.includes('registerReceiver(comTacReceiver')) {
-               src = src.replace('super.onCreate(null)', `super.onCreate(null)\n${registerCode}`);
-           }
+      if (src.includes('super.onCreate(null)') && !src.includes('registerReceiver(comTacReceiver')) {
+           src = src.replace('super.onCreate(null)', `super.onCreate(null)\n${registerCode}`);
       }
     }
     config.modResults.contents = src;
@@ -207,7 +173,7 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- PLUGIN 2 : SERVICE ACCESSIBILITÉ ---
+// --- SERVICE ACCESSIBILITÉ (CORRECTION : CONSUMER TOUS LES ÉVÉNEMENTS) ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -238,6 +204,8 @@ function withAccessibilityService(config) {
     async (config) => {
         const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
         if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
+        
+        // C'EST ICI QUE JE MODIFIE LE CODE JAVA POUR RENVOYER TRUE (Consommé)
         const javaContent = `package com.tactical.comtac;
 import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;
@@ -252,18 +220,26 @@ public class ComTacAccessibilityService extends AccessibilityService {
     protected boolean onKeyEvent(KeyEvent event) {
         int action = event.getAction();
         int keyCode = event.getKeyCode();
+        
         if (action == KeyEvent.ACTION_DOWN) {
+            // Liste des touches interceptées
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
                 keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_NEXT ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || 
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
-                keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE) {
+                keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE ||
+                keyCode == KeyEvent.KEYCODE_MUTE) { // Ajout MUTE
+                
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
-                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) { return true; }
+                
+                // IMPORTANT : On retourne TRUE pour TOUTES ces touches
+                // Cela dit au système "C'est bon, j'ai géré, ne fais rien d'autre"
+                // Empêche le changement de piste, le lancement de Spotify, ou le changement de sortie audio
+                return true; 
             }
         }
         return super.onKeyEvent(event);
@@ -299,7 +275,6 @@ public class ComTacAccessibilityService extends AccessibilityService {
   return config;
 }
 
-// --- PLUGIN 3 : FIX COMPATIBILITÉ GRADLE ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
