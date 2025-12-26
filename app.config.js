@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
-  // L'ordre des plugins est important pour la fusion du Manifest
   return withCallKeepActivity(
     withAccessibilityService(
       withKeyEventBuildGradleFix(
@@ -41,9 +40,12 @@ module.exports = function(config) {
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
                 "android.permission.FOREGROUND_SERVICE",
+                // --- PERMISSIONS CRITIQUES AJOUTÉES ---
+                "android.permission.POST_NOTIFICATIONS", // <--- MANQUAIT ICI
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                 "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+                // --------------------------------------
                 "android.permission.WAKE_LOCK",
                 "android.permission.BATTERY_STATS",
                 "android.permission.BLUETOOTH",
@@ -67,7 +69,6 @@ module.exports = function(config) {
                       compileSdkVersion: 34, 
                       buildToolsVersion: "34.0.0", 
                       targetSdkVersion: 34,
-                      // Ajout critique pour résoudre les conflits de Manifest
                       extraMavenRepos: ["https://www.jitpack.io"]
                     },
                     ios: {
@@ -85,7 +86,9 @@ module.exports = function(config) {
   );
 };
 
-// --- PLUGIN 1 : CALLKEEP FIXED ---
+// ... (Gardez les fonctions plugins existantes ci-dessous : withCallKeepActivity, withMainActivityInjection, etc.)
+// Elles sont correctes dans votre version précédente, assurez-vous juste de copier le bloc module.exports ci-dessus.
+
 function withCallKeepActivity(config) {
   return withAndroidManifest(config, async (config) => {
     const manifest = config.modResults.manifest;
@@ -93,7 +96,6 @@ function withCallKeepActivity(config) {
 
     if (!app.service) app.service = [];
     
-    // VoiceConnectionService : AJOUT DE android:exported="true"
     if (!app.service.some(s => s.$['android:name'] === 'io.wazo.callkeep.VoiceConnectionService')) {
         app.service.push({
             $: {
@@ -101,7 +103,7 @@ function withCallKeepActivity(config) {
                 'android:label': 'Wazo',
                 'android:permission': 'android.permission.BIND_TELECOM_CONNECTION_SERVICE',
                 'android:foregroundServiceType': 'phoneCall|camera|microphone',
-                'android:exported': 'true' // <--- FIX CRITIQUE ANDROID 12+
+                'android:exported': 'true'
             },
             'intent-filter': [{
                 'action': [{ $: { 'android:name': 'android.telecom.ConnectionService' } }]
@@ -109,12 +111,11 @@ function withCallKeepActivity(config) {
         });
     }
     
-    // BackgroundMessagingService
     if (!app.service.some(s => s.$['android:name'] === 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService')) {
        app.service.push({
            $: { 
                'android:name': 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService',
-               'android:exported': 'true' // Par sécurité
+               'android:exported': 'true'
            }
        });
     }
@@ -123,7 +124,6 @@ function withCallKeepActivity(config) {
   });
 }
 
-// --- PLUGIN 2 : KEYEVENT INJECTION ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -195,7 +195,6 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- PLUGIN 3 : ACCESSIBILITY SERVICE ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -287,7 +286,6 @@ public class ComTacAccessibilityService extends AccessibilityService {
   return config;
 }
 
-// --- PLUGIN 4 : BUILD GRADLE FIX ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
@@ -313,7 +311,6 @@ function withKeyEventBuildGradleFix(config) {
   ]);
 }
 
-// --- PLUGIN 5 : MUSIC CONTROL SERVICE ---
 function withMusicControlFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
