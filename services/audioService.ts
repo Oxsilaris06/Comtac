@@ -1,6 +1,7 @@
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
 import RNSoundLevel from 'react-native-sound-level';
 import { VolumeManager } from 'react-native-volume-manager';
+import InCallManager from 'react-native-incall-manager';
 import { headsetService } from './headsetService';
 import MusicControl from 'react-native-music-control';
 
@@ -9,42 +10,49 @@ class AudioService {
   isTx: boolean = false;
   mode: 'ptt' | 'vox' = 'ptt';
   
+  // VAD
   private noiseFloor: number = -60;
   private voxHoldTime: number = 1000; 
   private voxTimer: any = null;
   
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
   private isInitialized = false;
-  private isSessionActive = false; 
+  private isSessionActive = false;
 
   async init(): Promise<boolean> {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Initializing (Pure Media)...");
+      console.log("[Audio] Initializing (Stable Mode)...");
 
-      // 1. Setup Headset (Events uniquement)
+      // 1. Setup Headset
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Cmd:", source);
           this.toggleVox(); 
       });
+      headsetService.setConnectionCallback((isConnected, type) => { 
+          this.handleRouteUpdate(isConnected, type); 
+      });
       headsetService.init();
 
-      // 2. Acquisition Micro
+      // 2. Audio Config (InCallManager)
+      try {
+          // On n'active pas l'audio tout de suite pour éviter le crash
+          // On le prépare juste
+          InCallManager.setKeepScreenOn(true);
+      } catch (e) { console.warn("InCallManager error", e); }
+
+      // 3. Micro
       try {
         const stream = await mediaDevices.getUserMedia({ 
             audio: {
                 echoCancellation: true,
                 autoGainControl: true,
-                noiseSuppression: true,
-                // On active les traitements Google pour compenser l'absence de InCallManager
-                googEchoCancellation: true,
-                googAutoGainControl: true,
-                googNoiseSuppression: true,
-                googHighpassFilter: true
+                noiseSuppression: true
             },
             video: false 
         }) as MediaStream;
+        
         this.stream = stream;
         this.setTx(false); 
       } catch (e) {
@@ -58,7 +66,7 @@ class AudioService {
       this.isInitialized = true;
       return true;
     } catch (err) {
-      console.error("[Audio] Fatal Init Error:", err);
+      console.error("[Audio] Init Error:", err);
       return false;
     }
   }
@@ -66,8 +74,15 @@ class AudioService {
   public startSession(roomName: string = "Tactical Net") {
       this.isSessionActive = true;
       this.updateNotification();
+
+      // CRASH FIX: On attend que la connexion soit établie (via le délai dans App.tsx)
+      // pour activer InCallManager et MusicControl
+      try {
+          InCallManager.start({ media: 'video' }); // 'video' mode est moins agressif que 'audio'
+          this.enforceAudioRoute();
+      } catch(e) {}
       
-      // On lance le service MusicControl (Focus Audio)
+      // On lance le service MusicControl après un délai
       setTimeout(() => {
           if (this.isSessionActive) {
               try {
@@ -81,7 +96,21 @@ class AudioService {
       this.isSessionActive = false;
       try {
           MusicControl.stopControl();
+          InCallManager.stop();
       } catch (e) {}
+  }
+
+  private enforceAudioRoute() {
+      if (headsetService.isHeadsetConnected) {
+          InCallManager.setForceSpeakerphoneOn(false);
+      } else {
+          InCallManager.setForceSpeakerphoneOn(true);
+      }
+  }
+
+  private handleRouteUpdate(isConnected: boolean, type: string) {
+      this.enforceAudioRoute();
+      this.updateNotification();
   }
 
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
