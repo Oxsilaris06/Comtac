@@ -1,4 +1,4 @@
-import './polyfills'; // Toujours en premier
+import './polyfills'; 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
@@ -8,11 +8,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-
-// FIX: Import from 'expo-camera/next' for CameraView support in SDK 50
-// If this fails, we will revert to legacy 'Camera'
 import { CameraView, useCameraPermissions } from 'expo-camera/next';
-
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Battery from 'expo-battery';
@@ -23,9 +19,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Magnetometer } from 'expo-sensors';
 import NetInfo from '@react-native-community/netinfo';
 import { Audio } from 'expo-av';
-import InCallManager from 'react-native-incall-manager';
+// RETRAIT DE INCALLMANAGER
 
-// Imports Types & Services
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData, AppSettings, DEFAULT_SETTINGS } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
@@ -39,11 +34,8 @@ const generateShortId = () => Math.random().toString(36).substring(2, 10).toUppe
 
 const App: React.FC = () => {
   useKeepAwake();
-  
-  // Hook from expo-camera/next
   const [permission, requestPermission] = useCameraPermissions();
 
-  // --- CONFIGURATION ---
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
   const [user, setUser] = useState<UserData>({
@@ -90,7 +82,6 @@ const App: React.FC = () => {
   const gpsSubscription = useRef<Location.LocationSubscription | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
-  // --- INIT CONFIG ---
   useEffect(() => {
       configService.init().then(s => setSettings(s));
       const unsub = configService.subscribe((newSettings) => {
@@ -101,15 +92,12 @@ const App: React.FC = () => {
   }, []);
 
   const applySettings = (s: AppSettings) => {
-      if (s.audioOutput === 'hp') InCallManager.setForceSpeakerphoneOn(true);
-      else if (s.audioOutput === 'casque') InCallManager.setForceSpeakerphoneOn(false);
-      
+      // Logic audio output supprimée sans InCallManager (Android gère auto)
       if (gpsSubscription.current) {
           startGpsTracking(s.gpsUpdateInterval);
       }
   };
 
-  // --- 1. GESTION RESEAU ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -128,7 +116,6 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
-  // --- 2. ABONNEMENT AUDIO ---
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
           console.log("[App] VOX State Update:", mode);
@@ -137,12 +124,10 @@ const App: React.FC = () => {
       return unsubscribe;
   }, []);
 
-  // --- 3. CAPTEURS PASSIFS ---
   useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
   useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
   useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
   
-  // --- 4. BACK HANDLER ---
   useEffect(() => { const backAction = () => { 
       if (view === 'settings') { setView('menu'); return true; }
       if (selectedOperatorId) { setSelectedOperatorId(null); return true; } 
@@ -161,10 +146,8 @@ const App: React.FC = () => {
   const handleLogout = () => {
       if (peerRef.current) peerRef.current.destroy();
       setPeers({}); setPings([]); setHostId(''); setView('login');
-      
       audioService.stopSession();
       if (gpsSubscription.current) { gpsSubscription.current.remove(); gpsSubscription.current = null; }
-      
       audioService.setTx(false); 
       setBannedPeers([]);
       setIsServicesReady(false); 
@@ -416,18 +399,14 @@ const App: React.FC = () => {
 
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
-    
     console.log("[App] Starting Services Sequence...");
-
     try {
         await checkAllPermissions();
-
         const audioInitResult = await audioService.init();
         if (!audioInitResult) {
             showToast("Erreur init audio - Réessayer", "error");
             return;
         }
-
         audioService.startMetering((state) => {
           const isTransmitting = state === 1;
           if (isTransmitting !== user.isTx) {
@@ -439,9 +418,7 @@ const App: React.FC = () => {
              });
           }
         });
-        
         const locationStatus = await Location.getForegroundPermissionsAsync();
-        
         if (locationStatus.granted) {
             try {
                 const initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -454,19 +431,14 @@ const App: React.FC = () => {
                     setGpsStatus('OK');
                 }
             } catch (e) { console.warn("[App] Initial GPS fix failed"); }
-
             startGpsTracking(settings.gpsUpdateInterval);
-            
         } else {
              setGpsStatus('ERROR');
              showToast("GPS non disponible", "error");
         }
-
         if (!permission?.granted) { requestPermission(); }
-
         setIsServicesReady(true);
         console.log("[App] Services Ready");
-
     } catch (e) {
         console.error("[App] Start Services Error", e);
         showToast("Erreur critique services", "error");
@@ -483,7 +455,6 @@ const App: React.FC = () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
-    
     setUser(prev => ({ ...prev, callsign: tri }));
     setView('menu');
   };
@@ -494,9 +465,7 @@ const App: React.FC = () => {
     setHostId(finalId);
     const role = OperatorRole.OPR;
     setUser(prev => ({ ...prev, role }));
-    
     audioService.startSession(`CANAL ${finalId}`);
-
     initPeer(role, finalId);
     setView('ops');
   };
@@ -525,7 +494,6 @@ const App: React.FC = () => {
   const renderMenu = () => (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.menuContainer}>
-        {/* BOUTON SETTINGS EN HAUT À DROITE */}
         <View style={{flexDirection: 'row', justifyContent:'space-between', alignItems:'center', marginBottom: 20}}>
             <Text style={styles.sectionTitle}>DÉPLOIEMENT</Text>
             <View style={{flexDirection: 'row', gap: 15}}>
@@ -537,8 +505,6 @@ const App: React.FC = () => {
                 </TouchableOpacity>
             </View>
         </View>
-
-        {/* STATUS BAR (GPS, Services) */}
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 20, backgroundColor: '#18181b', padding: 10, borderRadius: 8}}>
                 {isServicesReady ? (
                     <MaterialIcons name="check-circle" size={16} color="#22c55e" />
@@ -546,12 +512,10 @@ const App: React.FC = () => {
                     <ActivityIndicator size="small" color="#3b82f6" />
                 )}
                 <Text style={{color: '#71717a', fontSize: 10, marginRight: 10}}>SYS</Text>
-                
                 {gpsStatus === 'WAITING' && <MaterialIcons name="gps-not-fixed" size={16} color="#eab308" />}
                 {gpsStatus === 'OK' && <MaterialIcons name="gps-fixed" size={16} color="#22c55e" />}
                 <Text style={{color: '#71717a', fontSize: 10}}>GPS</Text>
         </View>
-
         <TouchableOpacity onPress={() => { 
             const role = OperatorRole.HOST; 
             setUser(prev => ({ ...prev, role })); 
@@ -707,7 +671,6 @@ const App: React.FC = () => {
                 onPressIn={() => { 
                     if(silenceMode && user.role !== OperatorRole.HOST) return; 
                     if(!voxActive) { 
-                        if (user.role !== OperatorRole.HOST) audioService.muteIncoming(true);
                         audioService.setTx(true); 
                         setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); 
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
@@ -716,7 +679,6 @@ const App: React.FC = () => {
                 onPressOut={() => { 
                     if(!voxActive) { 
                         audioService.setTx(false); 
-                        if (user.role !== OperatorRole.HOST) audioService.muteIncoming(false);
                         setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); 
                     }
                 }} 
@@ -743,6 +705,7 @@ const App: React.FC = () => {
        view === 'settings' ? <SettingsView onClose={() => setView('menu')} /> :
        renderDashboard()}
 
+      {/* MODALES */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
