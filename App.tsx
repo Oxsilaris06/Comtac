@@ -161,16 +161,19 @@ const App: React.FC = () => {
   const mergePeer = useCallback((newPeer: UserData) => {
     setPeers(prev => {
         const next = { ...prev };
+        // FIX DOUBLON : On ne merge jamais notre propre ID
+        if (newPeer.id === user.id) return next;
+
         const oldId = Object.keys(next).find(key => next[key].callsign === newPeer.callsign && key !== newPeer.id);
         if (oldId) delete next[oldId];
         next[newPeer.id] = newPeer;
         return next;
     });
-  }, []);
+  }, [user.id]);
 
   const handleData = useCallback((data: any, fromId: string) => {
     if (data.from === user.id) return;
-    if (data.user && data.user.id === user.id) return;
+    if (data.user && data.user.id === user.id) return; // Ignore self
 
     switch (data.type) {
       case 'UPDATE': case 'FULL': case 'UPDATE_USER':
@@ -178,7 +181,11 @@ const App: React.FC = () => {
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
-        if (list.length > 0) { list.forEach((u: UserData) => { if(u.id && u.id !== user.id) mergePeer(u); }); }
+        if (list.length > 0) { 
+            list.forEach((u: UserData) => { 
+                if(u.id && u.id !== user.id) mergePeer(u); 
+            }); 
+        }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
       case 'PING':
@@ -261,6 +268,7 @@ const App: React.FC = () => {
       if (initialRole === OperatorRole.HOST) {
         setHostId(pid);
         showToast(`HÔTE: ${pid}`);
+        audioService.startSession(`CANAL ${pid}`); // Hôte : On démarre l'audio ici
       } else if (targetHostId) {
         connectToHost(targetHostId);
       }
@@ -302,6 +310,10 @@ const App: React.FC = () => {
     
     conn.on('open', () => {
       showToast(`CONNECTÉ À ${targetId}`);
+      
+      // CRASH FIX : On démarre l'audio UNIQUEMENT quand la connexion est stable
+      audioService.startSession(`CANAL ${targetId}`);
+      
       conn.send({ type: 'FULL', user: user });
       const call = peerRef.current!.call(targetId, audioService.stream!);
       call.on('stream', (rs) => audioService.playStream(rs));
@@ -396,18 +408,14 @@ const App: React.FC = () => {
 
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
-    
     console.log("[App] Starting Services Sequence...");
-
     try {
         await checkAllPermissions();
-
         const audioInitResult = await audioService.init();
         if (!audioInitResult) {
             showToast("Erreur init audio - Réessayer", "error");
             return;
         }
-
         audioService.startMetering((state) => {
           const isTransmitting = state === 1;
           if (isTransmitting !== user.isTx) {
@@ -419,9 +427,7 @@ const App: React.FC = () => {
              });
           }
         });
-        
         const locationStatus = await Location.getForegroundPermissionsAsync();
-        
         if (locationStatus.granted) {
             try {
                 const initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -434,19 +440,14 @@ const App: React.FC = () => {
                     setGpsStatus('OK');
                 }
             } catch (e) { console.warn("[App] Initial GPS fix failed"); }
-
             startGpsTracking(settings.gpsUpdateInterval);
-            
         } else {
              setGpsStatus('ERROR');
              showToast("GPS non disponible", "error");
         }
-
         if (!permission?.granted) { requestPermission(); }
-
         setIsServicesReady(true);
         console.log("[App] Services Ready");
-
     } catch (e) {
         console.error("[App] Start Services Error", e);
         showToast("Erreur critique services", "error");
@@ -463,7 +464,6 @@ const App: React.FC = () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
-    
     setUser(prev => ({ ...prev, callsign: tri }));
     setView('menu');
   };
@@ -475,21 +475,17 @@ const App: React.FC = () => {
     const role = OperatorRole.OPR;
     setUser(prev => ({ ...prev, role }));
     
-    // CRASH FIX: On attend que l'audio soit prêt avant de lancer la connexion P2P
-    // et on sépare le démarrage audio de la connexion réseau
-    audioService.startSession(`CANAL ${finalId}`);
+    // Modification: On démarre juste la logique Peer, PAS l'audio session
+    // L'audio session sera lancée dans 'connectToHost' -> 'conn.on(open)'
+    // audioService.startSession(`CANAL ${finalId}`); <-- RETIRÉ ICI
 
-    // Délai de sécurité pour laisser l'audio (MusicControl) prendre le focus
-    setTimeout(() => {
-        initPeer(role, finalId);
-        setView('ops');
-    }, 1500);
+    initPeer(role, finalId);
+    setView('ops');
   };
 
   const handleScannerBarCodeScanned = ({ data }: any) => {
     setShowScanner(false);
     setHostInput(data);
-    // Délai un peu plus long pour laisser le modal se fermer proprement
     setTimeout(() => joinSession(data), 800);
   };
 
@@ -522,7 +518,6 @@ const App: React.FC = () => {
                 </TouchableOpacity>
             </View>
         </View>
-
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 20, backgroundColor: '#18181b', padding: 10, borderRadius: 8}}>
                 {isServicesReady ? (
                     <MaterialIcons name="check-circle" size={16} color="#22c55e" />
@@ -530,22 +525,17 @@ const App: React.FC = () => {
                     <ActivityIndicator size="small" color="#3b82f6" />
                 )}
                 <Text style={{color: '#71717a', fontSize: 10, marginRight: 10}}>SYS</Text>
-                
                 {gpsStatus === 'WAITING' && <MaterialIcons name="gps-not-fixed" size={16} color="#eab308" />}
                 {gpsStatus === 'OK' && <MaterialIcons name="gps-fixed" size={16} color="#22c55e" />}
                 <Text style={{color: '#71717a', fontSize: 10}}>GPS</Text>
         </View>
-
         <TouchableOpacity onPress={() => { 
             const role = OperatorRole.HOST; 
             setUser(prev => ({ ...prev, role })); 
+            // HOST : On peut démarrer tout de suite car on n'attend pas de handshake
             audioService.startSession("QG TACTIQUE");
-            
-            // Délai aussi pour l'hôte pour la cohérence
-            setTimeout(() => {
-                initPeer(role); 
-                setView('ops'); 
-            }, 1000);
+            initPeer(role); 
+            setView('ops'); 
         }} style={styles.menuCard}>
           <MaterialIcons name="add-circle" size={40} color="#3b82f6" />
           <View style={{marginLeft: 20}}>
@@ -571,7 +561,6 @@ const App: React.FC = () => {
     </SafeAreaView>
   );
 
-  // ... (renderDashboard et le reste restent identiques) ...
   const renderDashboard = () => (
     <View style={{flex: 1}}>
       <View style={{backgroundColor: '#09090b'}}>
@@ -717,135 +706,6 @@ const App: React.FC = () => {
             </TouchableOpacity>
         </View>
       </View>
-    </View>
-  );
-
-  return (
-    <View style={styles.container}>
-      <StatusBar style="light" backgroundColor="#000" />
-      
-      {/* Intégration du modal Consentement avec état checké */}
-      <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
-
-      {view === 'login' ? renderLogin() :
-       view === 'menu' ? renderMenu() :
-       view === 'settings' ? <SettingsView onClose={() => setView('menu')} /> :
-       renderDashboard()}
-
-      {/* ... MODALES inchangées ... */}
-      <Modal 
-        visible={!!selectedOperatorId} 
-        animationType="fade" 
-        transparent
-        onRequestClose={() => setSelectedOperatorId(null)}
-      >
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedOperatorId(null)}>
-           <View style={[styles.modalContent, { backgroundColor: '#18181b', borderColor: '#333', borderWidth: 1 }]}>
-               
-               <View style={{alignItems: 'center', marginBottom: 20}}>
-                   <Text style={[styles.modalTitle, {color: 'white', marginBottom: 5}]}>ACTION OPÉRATEUR</Text>
-                   <Text style={{color: '#a1a1aa', fontSize: 16, fontWeight: 'bold'}}>
-                       {peers[selectedOperatorId || '']?.callsign || 'Inconnu'}
-                   </Text>
-               </View>
-               
-               <TouchableOpacity 
-                   onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} 
-                   style={[styles.modalBtn, {backgroundColor: '#d946ef', marginBottom: 12, width: '100%'}]}
-               >
-                   <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>APPEL PRIVÉ</Text>
-               </TouchableOpacity>
-               
-               {user.role === OperatorRole.HOST && (
-                   <TouchableOpacity 
-                       onPress={() => selectedOperatorId && handleKickUser(selectedOperatorId)} 
-                       style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 12, width: '100%'}]}
-                   >
-                        <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>BANNIR / KICK</Text>
-                   </TouchableOpacity>
-               )}
-               
-               <TouchableOpacity onPress={() => setSelectedOperatorId(null)} style={{padding: 10, marginTop: 5}}>
-                   <Text style={{color: '#71717a'}}>ANNULER</Text>
-               </TouchableOpacity>
-           </View>
-        </TouchableOpacity>
-      </Modal>
-
-      <Modal visible={showQRModal} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>MON IDENTITY TAG</Text>
-            <QRCode value={user.id || 'NO_ID'} size={200} />
-            <TouchableOpacity onPress={copyToClipboard}>
-                <Text style={styles.qrId}>{user.id}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowQRModal(false)} style={styles.closeBtn}>
-              <Text style={styles.closeBtnText}>FERMER</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={showScanner} animationType="slide">
-        <View style={{flex: 1, backgroundColor: 'black'}}>
-          <CameraView 
-            style={{flex: 1}} 
-            onBarcodeScanned={handleScannerBarCodeScanned}
-            barcodeScannerSettings={{
-              barcodeTypes: ["qr"],
-            }}
-          />
-          <TouchableOpacity onPress={() => setShowScanner(false)} style={styles.scannerClose}>
-            <MaterialIcons name="close" size={30} color="white" />
-          </TouchableOpacity>
-          <View style={{position: 'absolute', bottom: 50, alignSelf: 'center'}}>
-             <Text style={{color: 'white', backgroundColor: 'rgba(0,0,0,0.5)', padding: 10}}>Scannez le QR Code de l'Hôte</Text>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={showPingModal} animationType="fade" transparent>
-         <View style={styles.modalOverlay}>
-            <View style={[styles.modalContent, {backgroundColor: '#18181b', borderWidth: 1, borderColor: '#333'}]}>
-               <Text style={[styles.modalTitle, {color: 'white'}]}>ENVOYER PING</Text>
-               <TextInput 
-                  style={styles.pingInput} 
-                  placeholder="Message (ex: ENNEMI)" 
-                  placeholderTextColor="#71717a"
-                  onChangeText={setPingMsgInput}
-                  autoFocus
-               />
-               <View style={{flexDirection: 'row', gap: 10}}>
-                   <TouchableOpacity onPress={() => setShowPingModal(false)} style={[styles.modalBtn, {backgroundColor: '#27272a'}]}>
-                       <Text style={{color: 'white', fontWeight: 'bold'}}>ANNULER</Text>
-                   </TouchableOpacity>
-                   <TouchableOpacity onPress={() => {
-                       if(tempPingLoc && pingMsgInput) {
-                           const newPing: PingData = {
-                               id: Math.random().toString(36).substr(2, 9),
-                               lat: tempPingLoc.lat, lng: tempPingLoc.lng,
-                               msg: pingMsgInput, sender: user.callsign, timestamp: Date.now()
-                           };
-                           setPings(prev => [...prev, newPing]);
-                           broadcast({ type: 'PING', ping: newPing });
-                           setShowPingModal(false);
-                           setPingMsgInput('');
-                           setIsPingMode(false);
-                       }
-                   }} style={[styles.modalBtn, {backgroundColor: '#ef4444'}]}>
-                       <Text style={{color: 'white', fontWeight: 'bold'}}>ENVOYER</Text>
-                   </TouchableOpacity>
-               </View>
-            </View>
-         </View>
-      </Modal>
-
-      {toast && (
-        <View style={[styles.toast, toast.type === 'error' && {backgroundColor: '#ef4444'}]}>
-           <Text style={styles.toastText}>{toast.msg}</Text>
-        </View>
-      )}
     </View>
   );
 };
