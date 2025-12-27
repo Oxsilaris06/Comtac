@@ -40,8 +40,8 @@ module.exports = function(config) {
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
                 "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-                "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK", // CRITIQUE
+                "android.permission.FOREGROUND_SERVICE_MICROPHONE",     // CRITIQUE
                 "android.permission.WAKE_LOCK",
                 "android.permission.BATTERY_STATS",
                 "android.permission.SYSTEM_ALERT_WINDOW",
@@ -81,10 +81,11 @@ module.exports = function(config) {
   );
 };
 
-// --- SERVICE MUSIC CONTROL ---
+// --- CONFIGURATION SERVICE MUSIC CONTROL ---
 function withMusicControlManifest(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
+    
     const musicService = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotificationService';
     let mcService = mainApplication['service']?.find(s => s.$['android:name'] === musicService);
     if (!mcService) {
@@ -92,12 +93,14 @@ function withMusicControlManifest(config) {
         if (!mainApplication['service']) mainApplication['service'] = [];
         mainApplication['service'].push(mcService);
     }
+    // On déclare les deux types pour être blindé sur Android 14
     mcService.$['android:foregroundServiceType'] = 'mediaPlayback|microphone'; 
+
     return config;
   });
 }
 
-// --- INJECTION KEYEVENT ---
+// --- INJECTION KEYEVENT (Standard) ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -131,7 +134,7 @@ function withMainActivityInjection(config) {
     }
   }
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-    // Backup pour l'app au premier plan
+    // On laisse passer l'event au système pour MusicControl
     if (event.action == KeyEvent.ACTION_DOWN) {
        if (KeyEventModule.getInstance() != null) {
            KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
@@ -160,7 +163,7 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- SERVICE ACCESSIBILITÉ CRITIQUE ---
+// --- SERVICE ACCESSIBILITÉ ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -191,8 +194,6 @@ function withAccessibilityService(config) {
     async (config) => {
         const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
         if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
-        
-        // CORRECTION MAJEURE ICI : return true pour CONSOMMER l'événement
         const javaContent = `package com.tactical.comtac;
 import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;
@@ -221,10 +222,8 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
                 
-                // CRITIQUE : ON BLOQUE L'EVENT POUR QU'IL N'AILLE PAS PLUS LOIN (dans la couche Audio/Appel)
-                // Sauf Volume Up qu'on laisse passer pour le système
-                if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) return false; 
-                return true; 
+                // On laisse passer l'event, car MusicControl en a besoin pour prendre le focus
+                return false; 
             }
         }
         return super.onKeyEvent(event);
