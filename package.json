@@ -14,7 +14,6 @@
     "react": "18.2.0",
     "react-native": "0.73.6",
     "react-native-webrtc": "118.0.7",
-    "react-native-keyevent": "^0.2.2", 
     "react-native-music-control": "^1.4.1", 
     "react-native-sound-level": "^1.2.0",
     "react-native-volume-manager": "^1.8.4",
