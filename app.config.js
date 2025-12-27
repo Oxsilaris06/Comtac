@@ -75,8 +75,8 @@ module.exports = function(config) {
                     deploymentTarget: "13.4"
                   }
                 }
-              ],
-              "@config-plugins/react-native-webrtc"
+              ]
+              // RETRAIT DU PLUGIN WEBRTC CONFLICTUEL
             ]
           }
         )
@@ -117,7 +117,7 @@ function withCallKeepManifestFix(config) {
   });
 }
 
-// --- INJECTION KEYEVENT (Standard) ---
+// --- INJECTION KEYEVENT (Standard - Pas d'interception bloquante) ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -151,7 +151,7 @@ function withMainActivityInjection(config) {
     }
   }
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-    // IMPORTANT: On ne retourne PAS true ici pour laisser passer les events Media à MusicControl
+    // On laisse passer les events au système (pour MusicControl)
     if (event.action == KeyEvent.ACTION_DOWN) {
        if (KeyEventModule.getInstance() != null) {
            KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
@@ -180,7 +180,7 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- SERVICE ACCESSIBILITÉ (BACKUP) ---
+// --- SERVICE ACCESSIBILITÉ ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -238,7 +238,6 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
-                // On laisse passer pour MusicControl
                 return false; 
             }
         }
