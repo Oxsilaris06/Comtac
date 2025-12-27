@@ -9,30 +9,26 @@ class AudioService {
   isTx: boolean = false;
   mode: 'ptt' | 'vox' = 'ptt';
   
-  // VAD
   private noiseFloor: number = -60;
   private voxHoldTime: number = 1000; 
   private voxTimer: any = null;
   
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
   private isInitialized = false;
-  private isSessionActive = false; // Flag pour savoir si on est en ligne
-  private musicControlReady = false; // Flag pour éviter les appels prématurés
+  private isSessionActive = false; 
 
   async init(): Promise<boolean> {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Initializing (Pure Media Mode)...");
+      console.log("[Audio] Initializing...");
 
-      // 1. Initialiser Headset Service (Events)
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Cmd:", source);
           this.toggleVox(); 
       });
       headsetService.init();
 
-      // 2. Acquisition Micro (Avant tout)
       try {
         const stream = await mediaDevices.getUserMedia({ 
             audio: {
@@ -46,7 +42,6 @@ class AudioService {
             },
             video: false 
         }) as MediaStream;
-        
         this.stream = stream;
         this.setTx(false); 
       } catch (e) {
@@ -54,69 +49,33 @@ class AudioService {
         return false;
       }
 
-      // 3. Démarrage VAD
       this.setupAdaptiveVAD();
-      
       try { await VolumeManager.setVolume(1.0); } catch (e) {}
 
       this.isInitialized = true;
       return true;
-    } catch (err) {
-      console.error("[Audio] Init Error:", err);
-      return false;
-    }
+    } catch (err) { return false; }
   }
 
-  // Appelé quand le salon est créé ou rejoint, MAIS on attend la connexion réelle
-  public startSession() {
+  public startSession(roomName: string = "Tactical Net") {
       this.isSessionActive = true;
-      console.log("[Audio] Session Started (Logic Only)");
-      // On ne lance PAS MusicControl ici pour éviter le crash au scan/connexion
-  }
-
-  // Appelé quand la connexion P2P est établie (stable)
-  public activateMusicControl() {
-      if (!this.isSessionActive) return;
-      
-      console.log("[Audio] Activating Music Control (Safe Time)");
-      this.musicControlReady = true;
       this.updateNotification();
       
+      // On lance le service MusicControl avec un délai significatif
+      // pour éviter la course avec le handshake WebRTC
       setTimeout(() => {
-          try {
-              // Cet appel lance la notif et le Foreground Service
-              MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
-          } catch (e) {
-              console.warn("[Audio] MusicControl start error", e);
-          }
-      }, 500);
-  }
-
-  // Appelé lors d'une nouvelle connexion pour éviter le conflit
-  public pauseFocus() {
-      console.log("[Audio] Pausing Focus for New Connection");
-      try {
-          if (this.musicControlReady) {
-             MusicControl.updatePlayback({ state: MusicControl.STATE_PAUSED });
-          }
-      } catch (e) {}
-  }
-
-  public resumeFocus() {
-      console.log("[Audio] Resuming Focus");
-      if (!this.isSessionActive) return;
-      setTimeout(() => {
-          try {
-              if (this.musicControlReady) {
+          if (this.isSessionActive) {
+              try {
                   MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
+              } catch (e) {
+                  console.warn("[Audio] MusicControl start error (Non-fatal)", e);
               }
-          } catch (e) {}
-      }, 1000); // Délai de sécurité
+          }
+      }, 2000);
   }
 
   public stopSession() {
       this.isSessionActive = false;
-      this.musicControlReady = false;
       try {
           MusicControl.stopControl();
       } catch (e) {}
@@ -141,9 +100,10 @@ class AudioService {
   }
 
   updateNotification() {
-      if (!this.musicControlReady) return;
       const isVox = this.mode === 'vox';
-      headsetService.forceNotificationUpdate(isVox, this.isTx);
+      if (this.isSessionActive) {
+          headsetService.forceNotificationUpdate(isVox, this.isTx);
+      }
   }
 
   private setupAdaptiveVAD() {
@@ -181,7 +141,6 @@ class AudioService {
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
   
-  // Stubs
   muteIncoming(mute: boolean) {}
   playStream(remoteStream: MediaStream) {}
 }
