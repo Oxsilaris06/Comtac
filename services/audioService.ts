@@ -112,7 +112,6 @@ class AudioService {
       this.enforceAudioRoute();
       this.updateNotification();
       
-      // RELANCE AGRESSIVE MUSIC CONTROL
       MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
   }
 
