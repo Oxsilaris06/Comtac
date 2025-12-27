@@ -16,7 +16,7 @@ class AudioService {
   
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
   private isInitialized = false;
-  private isSessionActive = false; // Flag pour savoir si on est en ligne
+  private isSessionActive = false; // Flag important
 
   async init(): Promise<boolean> {
     if (this.isInitialized) return true;
@@ -70,31 +70,18 @@ class AudioService {
       this.isSessionActive = true;
       this.updateNotification();
       
-      // SÉQUENCEMENT CRITIQUE :
-      // On attend 2 secondes complètes que WebRTC finisse sa négociation initiale
-      // avant de lancer MusicControl. Cela évite le conflit d'accès AudioFocus.
+      // On retarde le démarrage du service musique pour éviter
+      // le conflit avec l'initialisation de la connexion WebRTC (PeerJS)
+      // qui demande beaucoup de ressources CPU/Réseau au démarrage.
       setTimeout(() => {
           if (this.isSessionActive) {
               this.enableMusicControl();
           }
-      }, 2000);
-  }
-
-  // Appelé quand un nouveau pair se connecte (via App.tsx par exemple, ou juste par sécurité)
-  public refreshSessionFocus() {
-      if (!this.isSessionActive) return;
-      
-      // On force une petite pause puis reprise pour réaffirmer le focus
-      // sans casser l'audio WebRTC déjà établi
-      setTimeout(() => {
-          this.enableMusicControl();
-      }, 1000);
+      }, 1500); // 1.5s de délai
   }
 
   private enableMusicControl() {
       try {
-          // On lance le service MusicControl en mode "Lecture"
-          // Cela va créer la notification persistante
           MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
       } catch (e) {
           console.warn("[Audio] MusicControl start error (Non-fatal)", e);
