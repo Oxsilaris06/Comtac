@@ -16,49 +16,148 @@ class AudioService {
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
+  
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
   private isInitialized = false;
+  private isCallKeepReady = false; // Sécurité anti-crash
 
   async init(): Promise<boolean> {
     if (this.isInitialized) return true;
 
     try {
       console.log("[Audio] Initializing...");
-      
-      // Initialisation de CallKeep d'abord
-      this.setupCallKeep();
 
-      // Initialisation du HeadsetService (qui configure MusicControl)
+      // 1. Initialisation Séquentielle (CRITIQUE pour éviter le crash)
+      await this.setupCallKeep();
+
+      // 2. Setup Headset
       headsetService.setCommandCallback((source) => { 
-          console.log("[Audio] Cmd:", source);
-          this.enforceAudioRoute(); 
+          console.log("[Audio] Cmd received:", source);
           this.toggleVox(); 
       });
       headsetService.setConnectionCallback((isConnected, type) => { 
           this.handleRouteUpdate(isConnected, type); 
       });
-      
-      // On attend un peu que MusicControl soit prêt dans HeadsetService
       headsetService.init();
 
+      // 3. Config Audio Initiale
       try {
+          // On prépare l'audio mais on ne force pas tout de suite
           InCallManager.start({ media: 'audio' }); 
           InCallManager.setKeepScreenOn(true);
-          this.enforceAudioRoute();
-      } catch (e) { console.warn("InCallManager error", e); }
+      } catch (e) { console.warn("InCallManager setup warning", e); }
 
+      // 4. Micro
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
         this.setTx(false); 
-      } catch (e) { return false; }
+      } catch (e) {
+        console.error("Micro Error", e);
+        return false;
+      }
 
       this.setupVox();
       try { await VolumeManager.setVolume(1.0); } catch (e) {}
 
       this.isInitialized = true;
       return true;
-    } catch (err) { return false; }
+    } catch (err) {
+      console.error("[Audio] Fatal Init Error:", err);
+      return false;
+    }
+  }
+
+  private async setupCallKeep() {
+      return new Promise<void>((resolve) => {
+          try {
+            const options = {
+              ios: { appName: 'ComTac', includesCallsInRecents: false },
+              android: {
+                alertTitle: 'Permissions',
+                alertDescription: 'Requis pour le fonctionnement PTT',
+                cancelButton: 'Annuler',
+                okButton: 'ok',
+                imageName: 'phone_account_icon',
+                additionalPermissions: [],
+                selfManaged: true, 
+                foregroundService: {
+                  channelId: 'comtac_channel',
+                  channelName: 'Service Radio',
+                  notificationTitle: 'ComTac Radio Actif',
+                  notificationIcon: 'ic_launcher',
+                },
+              },
+            };
+
+            RNCallKeep.setup(options).then(accepted => {
+                console.log('[CallKeep] Setup done, accepted:', accepted);
+                RNCallKeep.setAvailable(true);
+                this.isCallKeepReady = true;
+                resolve();
+            }).catch(err => {
+                console.error('[CallKeep] Setup Promise Error:', err);
+                resolve(); // On continue même si erreur pour ne pas bloquer l'app
+            });
+
+            RNCallKeep.addEventListener('endCall', () => this.stopSession());
+            RNCallKeep.addEventListener('answerCall', () => {}); 
+            
+            // Backup events
+            RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted }) => {
+                if(this.currentCallId) RNCallKeep.setMutedCall(this.currentCallId, false);
+                this.toggleVox();
+            });
+            
+          } catch (err) {
+            console.error('[CallKeep] Setup Try/Catch Error:', err);
+            resolve();
+          }
+      });
+  }
+
+  public startSession(roomName: string = "Tactical Net") {
+      if (!this.isCallKeepReady) {
+          console.warn("[Audio] CallKeep not ready yet, waiting...");
+          // Petit délai de secours si l'UI va trop vite
+          setTimeout(() => this.startSession(roomName), 500);
+          return;
+      }
+
+      if (this.currentCallId) return;
+
+      try {
+          const newId = uuid.v4() as string;
+          this.currentCallId = newId;
+          
+          console.log("[Audio] Starting Session Call:", newId);
+          RNCallKeep.startCall(newId, 'ComTac', roomName, 'generic', false);
+          
+          if (Platform.OS === 'android') {
+              RNCallKeep.reportConnectedOutgoingCallWithUUID(newId);
+          }
+          
+          this.enforceAudioRoute();
+          this.updateNotification();
+          
+          // On force MusicControl à s'afficher APRES CallKeep
+          setTimeout(() => {
+              headsetService.forceNotificationUpdate(this.mode === 'vox', this.isTx);
+          }, 1000);
+
+      } catch (e) {
+          console.error("[Audio] StartSession Error:", e);
+      }
+  }
+
+  public stopSession() {
+      if (!this.currentCallId) return;
+      try {
+          console.log("[Audio] Stopping Session");
+          RNCallKeep.endCall(this.currentCallId);
+          this.currentCallId = null;
+          MusicControl.stopControl(); // Stop propre
+      } catch (e) { console.warn("Stop session error", e); }
   }
 
   private enforceAudioRoute() {
@@ -70,77 +169,9 @@ class AudioService {
       }
   }
 
-  private setupCallKeep() {
-      try {
-        const options = {
-          ios: { appName: 'ComTac', includesCallsInRecents: false },
-          android: {
-            alertTitle: 'Permissions',
-            alertDescription: 'Requis pour audio',
-            cancelButton: 'Annuler',
-            okButton: 'ok',
-            imageName: 'phone_account_icon',
-            additionalPermissions: [],
-            selfManaged: true, 
-            foregroundService: {
-              channelId: 'comtac_channel',
-              channelName: 'Service Radio',
-              notificationTitle: 'ComTac Radio Actif',
-              notificationIcon: 'ic_launcher',
-            },
-          },
-        };
-
-        RNCallKeep.setup(options).then(accepted => RNCallKeep.setAvailable(true));
-        RNCallKeep.addEventListener('endCall', () => this.stopSession());
-        RNCallKeep.addEventListener('answerCall', () => {}); 
-        RNCallKeep.addEventListener('didPerformSetMutedCallAction', () => {
-            if (this.currentCallId) RNCallKeep.setMutedCall(this.currentCallId, false);
-            this.toggleVox();
-        });
-        RNCallKeep.addEventListener('didToggleHoldCallAction', () => {
-             if (this.currentCallId) RNCallKeep.setOnHold(this.currentCallId, false);
-            this.toggleVox();
-        });
-      } catch (err) {}
-  }
-
-  public startSession(roomName: string = "Tactical Net") {
-      if (this.currentCallId) return;
-      const newId = uuid.v4() as string;
-      this.currentCallId = newId;
-      
-      RNCallKeep.startCall(newId, 'ComTac', roomName, 'generic', false);
-      if (Platform.OS === 'android') {
-          RNCallKeep.reportConnectedOutgoingCallWithUUID(newId);
-      }
-      this.enforceAudioRoute();
-      this.updateNotification();
-      
-      // Sécurisation de l'appel MusicControl : on attend un tick pour éviter le conflit initial
-      setTimeout(() => {
-          try {
-              MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
-          } catch (e) { console.warn("MusicControl update error", e); }
-      }, 500);
-  }
-
-  public stopSession() {
-      if (!this.currentCallId) return;
-      RNCallKeep.endCall(this.currentCallId);
-      this.currentCallId = null;
-      try {
-          MusicControl.updatePlayback({ state: MusicControl.STATE_PAUSED });
-      } catch (e) {}
-  }
-
   private handleRouteUpdate(isConnected: boolean, type: string) {
-      if(isConnected) {
-          InCallManager.setForceSpeakerphoneOn(false); 
-          if (type.toLowerCase().includes('bluetooth')) InCallManager.chooseAudioRoute('Bluetooth');
-      } else {
-          InCallManager.setForceSpeakerphoneOn(true); 
-      }
+      console.log(`[Audio] Route changed: ${type} (${isConnected})`);
+      this.enforceAudioRoute();
       this.updateNotification();
   }
 
@@ -167,18 +198,12 @@ class AudioService {
       const isVox = this.mode === 'vox';
       const statusText = isVox ? `VOX ON ${this.isTx ? '(TX)' : ''}` : 'PTT (Appuyez)';
       
-      // CallKeep update
       try {
         RNCallKeep.updateDisplay(this.currentCallId, `ComTac: ${statusText}`, 'Radio Tactique');
       } catch (e) {}
       
-      // MusicControl update (sécurisé)
-      try {
-          MusicControl.updatePlayback({
-              state: MusicControl.STATE_PLAYING,
-              title: `ComTac: ${statusText}`
-          });
-      } catch (e) {}
+      // Mise à jour synchro de la notif musique
+      headsetService.forceNotificationUpdate(isVox, this.isTx);
   }
 
   private setupVox() {
