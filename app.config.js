@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
-  return withServicesManifestFix( // CHANGEMENT DE NOM POUR INCLURE MUSIC CONTROL
+  return withMusicControlManifest(
     withAccessibilityService(
       withKeyEventBuildGradleFix(
         withMainActivityInjection(
@@ -40,9 +40,8 @@ module.exports = function(config) {
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
                 "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK", // CRITIQUE
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK", // CRITIQUE POUR MUSIC CONTROL
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-                "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
                 "android.permission.WAKE_LOCK",
                 "android.permission.BATTERY_STATS",
                 "android.permission.SYSTEM_ALERT_WINDOW",
@@ -53,9 +52,7 @@ module.exports = function(config) {
                 "android.permission.MODIFY_AUDIO_SETTINGS",
                 "android.permission.ACTIVITY_RECOGNITION",
                 "android.permission.BIND_ACCESSIBILITY_SERVICE",
-                "android.permission.MANAGE_OWN_CALLS",
                 "android.permission.READ_PHONE_STATE",
-                "android.permission.CALL_PHONE",
                 "android.permission.POST_NOTIFICATIONS" 
               ]
             },
@@ -84,50 +81,27 @@ module.exports = function(config) {
   );
 };
 
-// --- FIX SERVICES ANDROID 14 (CALLKEEP + MUSIC CONTROL) ---
-function withServicesManifestFix(config) {
+// --- SERVICE MUSIC CONTROL UNIQUEMENT ---
+function withMusicControlManifest(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
     
-    // 1. CALLKEEP SERVICE (Phone Call)
-    const callKeepService = 'io.wazo.callkeep.VoiceConnectionService';
-    let ckService = mainApplication['service']?.find(s => s.$['android:name'] === callKeepService);
-    if (!ckService) {
-        ckService = { $: { 'android:name': callKeepService } };
-        if (!mainApplication['service']) mainApplication['service'] = [];
-        mainApplication['service'].push(ckService);
-    }
-    ckService.$['android:permission'] = 'android.permission.BIND_TELECOM_CONNECTION_SERVICE';
-    ckService.$['android:exported'] = 'true';
-    ckService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
-    if (!ckService['intent-filter']) {
-        ckService['intent-filter'] = [{ action: [{ $: { 'android:name': 'android.telecom.ConnectionService' } }] }];
-    }
-
-    // 2. CALLKEEP BACKGROUND SERVICE
-    const ckBgService = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
-    let ckBService = mainApplication['service']?.find(s => s.$['android:name'] === ckBgService);
-    if (!ckBService) {
-        ckBService = { $: { 'android:name': ckBgService } };
-        mainApplication['service'].push(ckBService);
-    }
-    ckBService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
-
-    // 3. MUSIC CONTROL SERVICE (Media Playback - CRITIQUE POUR ÉVITER LE CRASH)
+    // MUSIC CONTROL SERVICE (Media Playback)
     const musicService = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotificationService';
     let mcService = mainApplication['service']?.find(s => s.$['android:name'] === musicService);
     if (!mcService) {
         mcService = { $: { 'android:name': musicService } };
+        if (!mainApplication['service']) mainApplication['service'] = [];
         mainApplication['service'].push(mcService);
     }
-    // C'est ce flag qui autorise la notif musique en même temps que l'appel
-    mcService.$['android:foregroundServiceType'] = 'mediaPlayback'; 
+    // IMPORTANT: On combine mediaPlayback et microphone pour essayer de garder le micro en vie
+    mcService.$['android:foregroundServiceType'] = 'mediaPlayback|microphone'; 
 
     return config;
   });
 }
 
-// --- INJECTION KEYEVENT ---
+// --- INJECTION KEYEVENT (Standard) ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -161,6 +135,7 @@ function withMainActivityInjection(config) {
     }
   }
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    // On laisse passer les events au système (pour MusicControl)
     if (event.action == KeyEvent.ACTION_DOWN) {
        if (KeyEventModule.getInstance() != null) {
            KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
@@ -189,6 +164,7 @@ function withMainActivityInjection(config) {
   });
 }
 
+// --- SERVICE ACCESSIBILITÉ ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -241,7 +217,8 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || 
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE || 
-                keyCode == KeyEvent.KEYCODE_MUTE) {
+                keyCode == KeyEvent.KEYCODE_MEDIA_MUTE) { // Correction constante MUTE
+                
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
