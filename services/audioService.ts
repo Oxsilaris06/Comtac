@@ -24,8 +24,11 @@ class AudioService {
 
     try {
       console.log("[Audio] Initializing...");
+      
+      // Initialisation de CallKeep d'abord
       this.setupCallKeep();
 
+      // Initialisation du HeadsetService (qui configure MusicControl)
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Cmd:", source);
           this.enforceAudioRoute(); 
@@ -34,6 +37,8 @@ class AudioService {
       headsetService.setConnectionCallback((isConnected, type) => { 
           this.handleRouteUpdate(isConnected, type); 
       });
+      
+      // On attend un peu que MusicControl soit prêt dans HeadsetService
       headsetService.init();
 
       try {
@@ -112,14 +117,21 @@ class AudioService {
       this.enforceAudioRoute();
       this.updateNotification();
       
-      MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
+      // Sécurisation de l'appel MusicControl : on attend un tick pour éviter le conflit initial
+      setTimeout(() => {
+          try {
+              MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
+          } catch (e) { console.warn("MusicControl update error", e); }
+      }, 500);
   }
 
   public stopSession() {
       if (!this.currentCallId) return;
       RNCallKeep.endCall(this.currentCallId);
       this.currentCallId = null;
-      MusicControl.updatePlayback({ state: MusicControl.STATE_PAUSED });
+      try {
+          MusicControl.updatePlayback({ state: MusicControl.STATE_PAUSED });
+      } catch (e) {}
   }
 
   private handleRouteUpdate(isConnected: boolean, type: string) {
@@ -154,12 +166,19 @@ class AudioService {
       if (!this.currentCallId) return;
       const isVox = this.mode === 'vox';
       const statusText = isVox ? `VOX ON ${this.isTx ? '(TX)' : ''}` : 'PTT (Appuyez)';
-      RNCallKeep.updateDisplay(this.currentCallId, `ComTac: ${statusText}`, 'Radio Tactique');
       
-      MusicControl.updatePlayback({
-          state: MusicControl.STATE_PLAYING,
-          title: `ComTac: ${statusText}`
-      });
+      // CallKeep update
+      try {
+        RNCallKeep.updateDisplay(this.currentCallId, `ComTac: ${statusText}`, 'Radio Tactique');
+      } catch (e) {}
+      
+      // MusicControl update (sécurisé)
+      try {
+          MusicControl.updatePlayback({
+              state: MusicControl.STATE_PLAYING,
+              title: `ComTac: ${statusText}`
+          });
+      } catch (e) {}
   }
 
   private setupVox() {
