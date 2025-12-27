@@ -14,7 +14,6 @@
     "react": "18.2.0",
     "react-native": "0.73.6",
     "react-native-webrtc": "118.0.7",
-    "react-native-callkeep": "^4.3.12",
     "react-native-incall-manager": "^4.1.0",
     "react-native-keyevent": "^0.2.2", 
     "react-native-music-control": "^1.4.1", 
