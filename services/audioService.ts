@@ -21,20 +21,23 @@ class AudioService {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Initializing...");
+      console.log("[Audio] Initializing (Pure Media)...");
 
+      // 1. Setup Headset (Events uniquement)
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Cmd:", source);
           this.toggleVox(); 
       });
       headsetService.init();
 
+      // 2. Acquisition Micro
       try {
         const stream = await mediaDevices.getUserMedia({ 
             audio: {
                 echoCancellation: true,
                 autoGainControl: true,
                 noiseSuppression: true,
+                // On active les traitements Google pour compenser l'absence de InCallManager
                 googEchoCancellation: true,
                 googAutoGainControl: true,
                 googNoiseSuppression: true,
@@ -54,24 +57,24 @@ class AudioService {
 
       this.isInitialized = true;
       return true;
-    } catch (err) { return false; }
+    } catch (err) {
+      console.error("[Audio] Fatal Init Error:", err);
+      return false;
+    }
   }
 
   public startSession(roomName: string = "Tactical Net") {
       this.isSessionActive = true;
       this.updateNotification();
       
-      // On lance le service MusicControl avec un délai significatif
-      // pour éviter la course avec le handshake WebRTC
+      // On lance le service MusicControl (Focus Audio)
       setTimeout(() => {
           if (this.isSessionActive) {
               try {
                   MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
-              } catch (e) {
-                  console.warn("[Audio] MusicControl start error (Non-fatal)", e);
-              }
+              } catch (e) {}
           }
-      }, 2000);
+      }, 1000);
   }
 
   public stopSession() {
