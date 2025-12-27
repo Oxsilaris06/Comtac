@@ -14,7 +14,10 @@ class HeadsetService {
     private lastVolumeUpTime: number = 0;
     private lastCommandTime: number = 0;
     private onCommand?: CommandCallback;
-    public isHeadsetConnected: boolean = false; 
+    
+    // On ne peut plus détecter le hardware sans InCallManager de façon fiable
+    // On considère par défaut que c'est connecté si on reçoit des events
+    public isHeadsetConnected: boolean = true; 
 
     constructor() {}
 
@@ -56,7 +59,9 @@ class HeadsetService {
         MusicControl.on(Command.nextTrack, () => handler('MEDIA_NEXT'));
         MusicControl.on(Command.previousTrack, () => handler('MEDIA_PREV'));
         
-        MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
+        // On initialise en Paused pour ne pas prendre le focus audio au démarrage de l'app
+        // Le focus sera pris lors de startSession()
+        MusicControl.updatePlayback({ state: MusicControl.STATE_PAUSED });
     }
 
     public forceNotificationUpdate(isVox: boolean, isTx: boolean) {
@@ -72,6 +77,7 @@ class HeadsetService {
     }
 
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
+    // Stub vide pour compatibilité
     public setConnectionCallback(callback: any) {} 
 
     private setupKeyEventListener() {
