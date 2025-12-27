@@ -1,5 +1,4 @@
-
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 import MusicControl, { Command } from 'react-native-music-control';
 
@@ -10,37 +9,40 @@ const KEY_CODES = {
 };
 
 type CommandCallback = (source: string) => void;
-type ConnectionCallback = (isConnected: boolean, type: string) => void;
 
 class HeadsetService {
     private lastVolumeUpTime: number = 0;
     private lastCommandTime: number = 0;
     private onCommand?: CommandCallback;
-    private onConnectionChange?: ConnectionCallback;
-    public isHeadsetConnected: boolean = false;
-    private eventEmitter: NativeEventEmitter | null = null;
-    private subscription: any = null;
+    public isHeadsetConnected: boolean = false; 
 
     constructor() {}
 
     public init() {
         this.cleanup();
         this.setupMusicControl(); 
-        this.setupKeyEventListener(); // PRIMARY INPUT (Via Accessibility)
-        this.setupConnectionListener();
+        this.setupKeyEventListener();
     }
 
     private setupMusicControl() {
         MusicControl.enableBackgroundMode(true);
-        // Important : On active les contrôles pour la NOTIFICATION
-        // Mais on sait que quand 2 membres sont connectés, ces events ne marcheront pas
-        // C'est KeyEventListener qui prendra le relais
+        MusicControl.handleAudioInterruptions(true); 
+        
         MusicControl.enableControl('play', true);
         MusicControl.enableControl('pause', true);
         MusicControl.enableControl('stop', false);
         MusicControl.enableControl('nextTrack', true);
         MusicControl.enableControl('previousTrack', true);
         MusicControl.enableControl('togglePlayPause', true);
+
+        MusicControl.setNowPlaying({
+            title: 'ComTac',
+            artwork: require('../assets/icon.png'), 
+            artist: 'PTT Ready',
+            color: 0x3b82f6,
+            notificationIcon: 'ic_launcher',
+            isLiveStream: true
+        });
 
         const handler = (action: string) => { 
             console.log("[Headset] MusicControl Event:", action);
@@ -54,52 +56,27 @@ class HeadsetService {
         MusicControl.on(Command.nextTrack, () => handler('MEDIA_NEXT'));
         MusicControl.on(Command.previousTrack, () => handler('MEDIA_PREV'));
         
-        this.forceNotificationUpdate(false, false);
+        MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
     }
 
     public forceNotificationUpdate(isVox: boolean, isTx: boolean) {
-        MusicControl.setNowPlaying({
-            title: 'ComTac',
-            artwork: require('../assets/icon.png'), 
-            artist: isVox ? (isTx ? "TX EN COURS..." : "VOX ACTIF") : "MODE PTT",
-            color: isTx ? 0xff0000 : 0x3b82f6,
-            notificationIcon: 'ic_launcher',
-            isLiveStream: true
-        });
         MusicControl.updatePlayback({
-            state: MusicControl.STATE_PLAYING, // Toujours Playing
-            elapsedTime: 0
+            state: MusicControl.STATE_PLAYING,
+            title: `ComTac: ${isVox ? (isTx ? "TX..." : "VOX ON") : "PTT"}`,
+            artist: isVox ? "Mode Mains Libres" : "Appuyez pour parler"
         });
     }
 
     private cleanup() {
-        if (this.subscription) { this.subscription.remove(); this.subscription = null; }
         KeyEvent.removeKeyDownListener();
     }
 
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
-    public setConnectionCallback(callback: ConnectionCallback) { this.onConnectionChange = callback; }
-
-    private setupConnectionListener() {
-        if (NativeModules.InCallManager) {
-            this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
-            this.subscription = this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
-                let deviceObj = data;
-                if (typeof data === 'string') { try { deviceObj = JSON.parse(data); } catch (e) { return; } }
-                if (!deviceObj) return;
-                const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
-                const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece', 'Headset', 'CarAudio', 'USB_HEADSET', 'AuxLine'];
-                const connected = headsetTypes.some(t => current.includes(t)) && current !== 'Speaker' && current !== 'Phone';
-                this.isHeadsetConnected = connected;
-                if (this.onConnectionChange) this.onConnectionChange(connected, current);
-            });
-        }
-    }
+    public setConnectionCallback(callback: any) {} 
 
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                // LOGIQUE PRIMAIRE (Fonctionne même en appel/VoIP)
                 if (keyEvent.keyCode === 25) return; 
                 if (keyEvent.keyCode === 24) { 
                     const now = Date.now();
@@ -111,7 +88,6 @@ class HeadsetService {
                 }
                 const validKeys = Object.values(KEY_CODES);
                 if (validKeys.includes(keyEvent.keyCode)) {
-                    console.log("[Headset] KeyEvent Received:", keyEvent.keyCode);
                     this.triggerCommand(`KEY_${keyEvent.keyCode}`);
                 }
             });
@@ -120,7 +96,6 @@ class HeadsetService {
 
     public triggerCommand(source: string) {
         const now = Date.now();
-        // Debounce de 300ms pour éviter les doublons (MusicControl + KeyEvent)
         if (now - this.lastCommandTime < 300) return;
         this.lastCommandTime = now;
         if (this.onCommand) this.onCommand(source);
