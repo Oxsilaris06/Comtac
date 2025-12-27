@@ -1,7 +1,6 @@
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
 import RNSoundLevel from 'react-native-sound-level';
 import { VolumeManager } from 'react-native-volume-manager';
-import InCallManager from 'react-native-incall-manager';
 import { headsetService } from './headsetService';
 import MusicControl from 'react-native-music-control';
 
@@ -9,9 +8,12 @@ class AudioService {
   stream: MediaStream | null = null;
   isTx: boolean = false;
   mode: 'ptt' | 'vox' = 'ptt';
-  voxThreshold: number = -35; 
-  voxHoldTime: number = 1000; 
-  voxTimer: any = null;
+  
+  // VAD
+  private noiseFloor: number = -60;
+  private voxHoldTime: number = 1000; 
+  private voxTimer: any = null;
+  
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
   private isInitialized = false;
 
@@ -19,21 +21,32 @@ class AudioService {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Initializing...");
+      console.log("[Audio] Initializing (Pure Media Mode)...");
 
+      // 1. Initialiser Headset Service (Events)
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Cmd:", source);
-          this.toggleVox(); // Simple toggle, la logique audio suit l'état
-      });
-      headsetService.setConnectionCallback((isConnected, type) => { 
-          this.handleRouteUpdate(isConnected, type); 
+          this.toggleVox(); 
       });
       headsetService.init();
 
-      // On active le micro mais on ne touche PAS à InCallManager tout de suite
-      // pour éviter le crash au scan/connexion.
+      // 2. Acquisition Micro
+      // On le fait avant tout le reste pour être sûr d'avoir la permission
       try {
-        const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
+        const stream = await mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,
+                autoGainControl: true,
+                noiseSuppression: true,
+                // Android-specific constraints
+                googEchoCancellation: true,
+                googAutoGainControl: true,
+                googNoiseSuppression: true,
+                googHighpassFilter: true
+            },
+            video: false 
+        }) as MediaStream;
+        
         this.stream = stream;
         this.setTx(false); 
       } catch (e) {
@@ -41,52 +54,39 @@ class AudioService {
         return false;
       }
 
-      this.setupVox();
+      // 3. Démarrage VAD
+      this.setupAdaptiveVAD();
+      
+      // 4. Volume
       try { await VolumeManager.setVolume(1.0); } catch (e) {}
 
       this.isInitialized = true;
       return true;
-    } catch (err) { return false; }
+    } catch (err) {
+      console.error("[Audio] Init Error:", err);
+      return false;
+    }
   }
 
   public startSession(roomName: string = "Tactical Net") {
-      // C'est le moment sûr pour démarrer InCallManager
-      try {
-          InCallManager.start({ media: 'video' }); // 'video' mode is less aggressive on route changes
-          InCallManager.setKeepScreenOn(true);
-          InCallManager.setSpeakerphoneOn(true); // Default to speaker
-          this.enforceAudioRoute(); // Then switch if headset
-      } catch (e) { console.warn("InCallManager start error", e); }
-
       this.updateNotification();
       
-      // On force MusicControl pour le background
+      // On lance le service MusicControl APRES avoir acquis le micro
+      // Cela évite la SecurityException sur Android 14
       setTimeout(() => {
           try {
+              // Cet appel lance la notif et le Foreground Service
               MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
-          } catch (e) {}
+          } catch (e) {
+              console.warn("[Audio] MusicControl start error", e);
+          }
       }, 500);
   }
 
   public stopSession() {
       try {
           MusicControl.stopControl();
-          InCallManager.stop();
       } catch (e) {}
-  }
-
-  private enforceAudioRoute() {
-      if (headsetService.isHeadsetConnected) {
-          InCallManager.setForceSpeakerphoneOn(false);
-          InCallManager.chooseAudioRoute('Bluetooth'); 
-      } else {
-          InCallManager.setForceSpeakerphoneOn(true);
-      }
-  }
-
-  private handleRouteUpdate(isConnected: boolean, type: string) {
-      // Petit délai pour laisser le temps à l'OS de switch
-      setTimeout(() => this.enforceAudioRoute(), 500);
   }
 
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
@@ -112,11 +112,23 @@ class AudioService {
       headsetService.forceNotificationUpdate(isVox, this.isTx);
   }
 
-  private setupVox() {
+  private setupAdaptiveVAD() {
       try {
         RNSoundLevel.start();
         RNSoundLevel.onNewFrame = (data: any) => {
-            if (this.mode === 'vox' && data.value > this.voxThreshold) {
+            if (this.mode !== 'vox') return;
+
+            const level = data.value;
+            // Algo simple d'adaptation
+            if (level < this.noiseFloor) {
+                this.noiseFloor = level;
+            } else {
+                this.noiseFloor = (this.noiseFloor * 0.99) + (level * 0.01);
+            }
+
+            const dynamicThreshold = Math.min(Math.max(this.noiseFloor + 15, -45), -10);
+            
+            if (level > dynamicThreshold) {
                 if (!this.isTx) this.setTx(true);
                 if (this.voxTimer) clearTimeout(this.voxTimer);
                 this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
@@ -136,6 +148,7 @@ class AudioService {
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
   
+  // Stubs (plus utilisés)
   muteIncoming(mute: boolean) {}
   playStream(remoteStream: MediaStream) {}
 }
