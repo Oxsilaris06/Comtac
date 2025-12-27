@@ -1,3 +1,4 @@
+
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 import MusicControl, { Command } from 'react-native-music-control';
@@ -25,14 +26,15 @@ class HeadsetService {
     public init() {
         this.cleanup();
         this.setupMusicControl(); 
-        this.setupKeyEventListener();
+        this.setupKeyEventListener(); // PRIMARY INPUT (Via Accessibility)
         this.setupConnectionListener();
     }
 
     private setupMusicControl() {
         MusicControl.enableBackgroundMode(true);
-        MusicControl.handleAudioInterruptions(true); // Gère le ducking automatiquement
-        
+        // Important : On active les contrôles pour la NOTIFICATION
+        // Mais on sait que quand 2 membres sont connectés, ces events ne marcheront pas
+        // C'est KeyEventListener qui prendra le relais
         MusicControl.enableControl('play', true);
         MusicControl.enableControl('pause', true);
         MusicControl.enableControl('stop', false);
@@ -40,21 +42,9 @@ class HeadsetService {
         MusicControl.enableControl('previousTrack', true);
         MusicControl.enableControl('togglePlayPause', true);
 
-        // Configuration initiale
-        MusicControl.setNowPlaying({
-            title: 'ComTac',
-            artwork: require('../assets/icon.png'), 
-            artist: 'PTT Ready',
-            color: 0x3b82f6,
-            notificationIcon: 'ic_launcher',
-            isLiveStream: true // Important pour éviter la barre de progression
-        });
-
-        // Handlers unifiés
         const handler = (action: string) => { 
-            console.log("[Headset] Media Action:", action);
+            console.log("[Headset] MusicControl Event:", action);
             this.triggerCommand(action);
-            // On reste TOUJOURS en Playing pour garder le focus boutons
             MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
         };
 
@@ -64,15 +54,21 @@ class HeadsetService {
         MusicControl.on(Command.nextTrack, () => handler('MEDIA_NEXT'));
         MusicControl.on(Command.previousTrack, () => handler('MEDIA_PREV'));
         
-        // Force Start
-        MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
+        this.forceNotificationUpdate(false, false);
     }
 
     public forceNotificationUpdate(isVox: boolean, isTx: boolean) {
+        MusicControl.setNowPlaying({
+            title: 'ComTac',
+            artwork: require('../assets/icon.png'), 
+            artist: isVox ? (isTx ? "TX EN COURS..." : "VOX ACTIF") : "MODE PTT",
+            color: isTx ? 0xff0000 : 0x3b82f6,
+            notificationIcon: 'ic_launcher',
+            isLiveStream: true
+        });
         MusicControl.updatePlayback({
             state: MusicControl.STATE_PLAYING, // Toujours Playing
-            title: `ComTac: ${isVox ? (isTx ? "TX..." : "VOX ON") : "PTT"}`,
-            artist: isVox ? "Mode Mains Libres" : "Appuyez pour parler"
+            elapsedTime: 0
         });
     }
 
@@ -103,6 +99,7 @@ class HeadsetService {
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
+                // LOGIQUE PRIMAIRE (Fonctionne même en appel/VoIP)
                 if (keyEvent.keyCode === 25) return; 
                 if (keyEvent.keyCode === 24) { 
                     const now = Date.now();
@@ -114,6 +111,7 @@ class HeadsetService {
                 }
                 const validKeys = Object.values(KEY_CODES);
                 if (validKeys.includes(keyEvent.keyCode)) {
+                    console.log("[Headset] KeyEvent Received:", keyEvent.keyCode);
                     this.triggerCommand(`KEY_${keyEvent.keyCode}`);
                 }
             });
@@ -122,6 +120,7 @@ class HeadsetService {
 
     public triggerCommand(source: string) {
         const now = Date.now();
+        // Debounce de 300ms pour éviter les doublons (MusicControl + KeyEvent)
         if (now - this.lastCommandTime < 300) return;
         this.lastCommandTime = now;
         if (this.onCommand) this.onCommand(source);
