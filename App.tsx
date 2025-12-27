@@ -8,7 +8,10 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+// FIX: Import correct pour SDK 50 si on veut le nouveau CameraView
+// Si CameraView n'est pas trouvé, on fallback sur Legacy Camera
+// Mais ici, l'erreur est sur useCameraPermissions.
+import { Camera, useCameraPermissions } from 'expo-camera'; 
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Battery from 'expo-battery';
@@ -35,6 +38,7 @@ const generateShortId = () => Math.random().toString(36).substring(2, 10).toUppe
 
 const App: React.FC = () => {
   useKeepAwake();
+  // Utilisation du hook de permissions
   const [permission, requestPermission] = useCameraPermissions();
 
   // --- CONFIGURATION ---
@@ -347,7 +351,6 @@ const App: React.FC = () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  // --- GESTION PERMISSIONS (AJOUT CALL_PHONE) ---
   const checkAllPermissions = async () => {
       if (Platform.OS === 'android') {
         try {
@@ -355,8 +358,8 @@ const App: React.FC = () => {
                 PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
                 PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
                 PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-                PermissionsAndroid.PERMISSIONS.CALL_PHONE, // AJOUT CRITIQUE
-                PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE, // AJOUT CRITIQUE
+                PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+                PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
             ];
 
             if (Platform.Version >= 33) {
@@ -520,6 +523,7 @@ const App: React.FC = () => {
   const renderMenu = () => (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.menuContainer}>
+        {/* BOUTON SETTINGS EN HAUT À DROITE */}
         <View style={{flexDirection: 'row', justifyContent:'space-between', alignItems:'center', marginBottom: 20}}>
             <Text style={styles.sectionTitle}>DÉPLOIEMENT</Text>
             <View style={{flexDirection: 'row', gap: 15}}>
@@ -532,6 +536,7 @@ const App: React.FC = () => {
             </View>
         </View>
 
+        {/* STATUS BAR (GPS, Services) */}
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 20, backgroundColor: '#18181b', padding: 10, borderRadius: 8}}>
                 {isServicesReady ? (
                     <MaterialIcons name="check-circle" size={16} color="#22c55e" />
