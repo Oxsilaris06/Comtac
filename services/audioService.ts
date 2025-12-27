@@ -12,7 +12,6 @@ class AudioService {
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
-  
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
   private isInitialized = false;
 
@@ -20,28 +19,19 @@ class AudioService {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Initializing (No CallKeep)...");
+      console.log("[Audio] Initializing...");
 
-      // 1. Setup Headset
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Cmd:", source);
-          this.enforceAudioRoute(); 
-          this.toggleVox(); 
+          this.toggleVox(); // Simple toggle, la logique audio suit l'état
       });
       headsetService.setConnectionCallback((isConnected, type) => { 
           this.handleRouteUpdate(isConnected, type); 
       });
       headsetService.init();
 
-      // 2. Audio Config
-      try {
-          // 'video' mode is sometimes better for background mic without CallKeep
-          InCallManager.start({ media: 'video' }); 
-          InCallManager.setKeepScreenOn(true);
-          this.enforceAudioRoute();
-      } catch (e) { console.warn("InCallManager setup warning", e); }
-
-      // 3. Micro
+      // On active le micro mais on ne touche PAS à InCallManager tout de suite
+      // pour éviter le crash au scan/connexion.
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
@@ -56,14 +46,18 @@ class AudioService {
 
       this.isInitialized = true;
       return true;
-    } catch (err) {
-      console.error("[Audio] Init Error:", err);
-      return false;
-    }
+    } catch (err) { return false; }
   }
 
   public startSession(roomName: string = "Tactical Net") {
-      this.enforceAudioRoute();
+      // C'est le moment sûr pour démarrer InCallManager
+      try {
+          InCallManager.start({ media: 'video' }); // 'video' mode is less aggressive on route changes
+          InCallManager.setKeepScreenOn(true);
+          InCallManager.setSpeakerphoneOn(true); // Default to speaker
+          this.enforceAudioRoute(); // Then switch if headset
+      } catch (e) { console.warn("InCallManager start error", e); }
+
       this.updateNotification();
       
       // On force MusicControl pour le background
@@ -84,7 +78,6 @@ class AudioService {
   private enforceAudioRoute() {
       if (headsetService.isHeadsetConnected) {
           InCallManager.setForceSpeakerphoneOn(false);
-          // Sans CallKeep, 'Bluetooth' simple suffit souvent
           InCallManager.chooseAudioRoute('Bluetooth'); 
       } else {
           InCallManager.setForceSpeakerphoneOn(true);
@@ -92,8 +85,8 @@ class AudioService {
   }
 
   private handleRouteUpdate(isConnected: boolean, type: string) {
-      this.enforceAudioRoute();
-      this.updateNotification();
+      // Petit délai pour laisser le temps à l'OS de switch
+      setTimeout(() => this.enforceAudioRoute(), 500);
   }
 
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
@@ -147,4 +140,4 @@ class AudioService {
   playStream(remoteStream: MediaStream) {}
 }
 
-export const audioService = new AudioService(); 
+export const audioService = new AudioService();
