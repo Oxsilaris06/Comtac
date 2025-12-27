@@ -16,7 +16,6 @@ class HeadsetService {
     private lastCommandTime: number = 0;
     private onCommand?: CommandCallback;
     private onConnectionChange?: ConnectionCallback;
-    
     public isHeadsetConnected: boolean = false;
     private eventEmitter: NativeEventEmitter | null = null;
     private subscription: any = null;
@@ -32,53 +31,49 @@ class HeadsetService {
 
     private setupMusicControl() {
         MusicControl.enableBackgroundMode(true);
+        MusicControl.handleAudioInterruptions(true); // Gère le ducking automatiquement
         
-        // On active TOUT pour être sûr de capter les clics
         MusicControl.enableControl('play', true);
         MusicControl.enableControl('pause', true);
         MusicControl.enableControl('stop', false);
         MusicControl.enableControl('nextTrack', true);
         MusicControl.enableControl('previousTrack', true);
-        MusicControl.enableControl('togglePlayPause', true); // Important pour certains casques
+        MusicControl.enableControl('togglePlayPause', true);
 
-        // Initialisation fictive
-        this.forceNotificationUpdate(false, false);
-
-        // Handlers
-        MusicControl.on(Command.play, () => { this.handleMediaAction('MEDIA_PLAY'); });
-        MusicControl.on(Command.pause, () => { this.handleMediaAction('MEDIA_PAUSE'); });
-        MusicControl.on(Command.togglePlayPause, () => { this.handleMediaAction('MEDIA_TOGGLE'); });
-        MusicControl.on(Command.nextTrack, () => this.handleMediaAction('MEDIA_NEXT'));
-        MusicControl.on(Command.previousTrack, () => this.handleMediaAction('MEDIA_PREV'));
-    }
-
-    // Appelée par audioService pour garder la notif à jour
-    public forceNotificationUpdate(isVox: boolean, isTx: boolean) {
-        const stateStr = isVox ? (isTx ? "TX EN COURS..." : "VOX ACTIF") : "MODE PTT";
-        
+        // Configuration initiale
         MusicControl.setNowPlaying({
-            title: 'ComTac Radio',
+            title: 'ComTac',
             artwork: require('../assets/icon.png'), 
-            artist: stateStr,
-            color: isTx ? 0xff0000 : 0x3b82f6,
-            notificationIcon: 'ic_launcher'
+            artist: 'PTT Ready',
+            color: 0x3b82f6,
+            notificationIcon: 'ic_launcher',
+            isLiveStream: true // Important pour éviter la barre de progression
         });
 
-        // On alterne Playing/Paused visuellement mais on force l'état interne pour garder le focus
-        MusicControl.updatePlayback({
-            state: isVox ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED,
-            elapsedTime: 0
-        });
+        // Handlers unifiés
+        const handler = (action: string) => { 
+            console.log("[Headset] Media Action:", action);
+            this.triggerCommand(action);
+            // On reste TOUJOURS en Playing pour garder le focus boutons
+            MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
+        };
+
+        MusicControl.on(Command.play, () => handler('MEDIA_PLAY'));
+        MusicControl.on(Command.pause, () => handler('MEDIA_PAUSE'));
+        MusicControl.on(Command.togglePlayPause, () => handler('MEDIA_TOGGLE'));
+        MusicControl.on(Command.nextTrack, () => handler('MEDIA_NEXT'));
+        MusicControl.on(Command.previousTrack, () => handler('MEDIA_PREV'));
+        
+        // Force Start
+        MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
     }
 
-    private handleMediaAction(action: string) {
-        console.log("[Headset] Media Action:", action);
-        // On renvoie la commande
-        this.triggerCommand(action);
-        
-        // On force un update pour montrer à l'OS qu'on a réagi
-        // (Sinon le bouton peut tourner dans le vide sur l'UI Android)
-        // L'update réel sera fait par audioService.updateNotification() en réponse au toggle
+    public forceNotificationUpdate(isVox: boolean, isTx: boolean) {
+        MusicControl.updatePlayback({
+            state: MusicControl.STATE_PLAYING, // Toujours Playing
+            title: `ComTac: ${isVox ? (isTx ? "TX..." : "VOX ON") : "PTT"}`,
+            artist: isVox ? "Mode Mains Libres" : "Appuyez pour parler"
+        });
     }
 
     private cleanup() {
@@ -96,11 +91,9 @@ class HeadsetService {
                 let deviceObj = data;
                 if (typeof data === 'string') { try { deviceObj = JSON.parse(data); } catch (e) { return; } }
                 if (!deviceObj) return;
-
                 const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
                 const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece', 'Headset', 'CarAudio', 'USB_HEADSET', 'AuxLine'];
                 const connected = headsetTypes.some(t => current.includes(t)) && current !== 'Speaker' && current !== 'Phone';
-
                 this.isHeadsetConnected = connected;
                 if (this.onConnectionChange) this.onConnectionChange(connected, current);
             });
@@ -110,8 +103,8 @@ class HeadsetService {
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                if (keyEvent.keyCode === 25) return; // Vol Down ignored
-                if (keyEvent.keyCode === 24) { // Vol Up
+                if (keyEvent.keyCode === 25) return; 
+                if (keyEvent.keyCode === 24) { 
                     const now = Date.now();
                     if (now - this.lastVolumeUpTime < 400) {
                         this.triggerCommand('DOUBLE_VOL_UP');
