@@ -32,8 +32,8 @@ class HeadsetService {
 
     public init() {
         this.cleanup();
-        this.setupMusicControl(); // PRIMARY LISTENER
-        this.setupKeyEventListener(); // BACKUP LISTENER
+        this.setupMusicControl(); 
+        this.setupKeyEventListener();
         this.setupConnectionListener();
     }
 
@@ -49,7 +49,7 @@ class HeadsetService {
         MusicControl.setNowPlaying({
             title: 'ComTac Radio',
             artwork: require('../assets/icon.png'), 
-            artist: 'Contrôle PTT Actif',
+            artist: 'PTT Actif',
             color: 0x3b82f6,
             notificationIcon: 'ic_launcher'
         });
@@ -67,7 +67,6 @@ class HeadsetService {
         MusicControl.on(Command.nextTrack, () => this.triggerCommand('MEDIA_NEXT'));
         MusicControl.on(Command.previousTrack, () => this.triggerCommand('MEDIA_PREV'));
         
-        // On force l'état Playing pour garder le focus
         MusicControl.updatePlayback({
             state: MusicControl.STATE_PLAYING,
             elapsedTime: 0
