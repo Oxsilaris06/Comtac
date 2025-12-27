@@ -16,7 +16,8 @@ class AudioService {
   
   private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
   private isInitialized = false;
-  private isSessionActive = false; // Flag important
+  private isSessionActive = false; // Flag pour savoir si on est en ligne
+  private musicControlReady = false; // Flag pour éviter les appels prématurés
 
   async init(): Promise<boolean> {
     if (this.isInitialized) return true;
@@ -66,30 +67,56 @@ class AudioService {
     }
   }
 
-  public startSession(roomName: string = "Tactical Net") {
+  // Appelé quand le salon est créé ou rejoint, MAIS on attend la connexion réelle
+  public startSession() {
       this.isSessionActive = true;
-      this.updateNotification();
-      
-      // On retarde le démarrage du service musique pour éviter
-      // le conflit avec l'initialisation de la connexion WebRTC (PeerJS)
-      // qui demande beaucoup de ressources CPU/Réseau au démarrage.
-      setTimeout(() => {
-          if (this.isSessionActive) {
-              this.enableMusicControl();
-          }
-      }, 1500); // 1.5s de délai
+      console.log("[Audio] Session Started (Logic Only)");
+      // On ne lance PAS MusicControl ici pour éviter le crash au scan/connexion
   }
 
-  private enableMusicControl() {
+  // Appelé quand la connexion P2P est établie (stable)
+  public activateMusicControl() {
+      if (!this.isSessionActive) return;
+      
+      console.log("[Audio] Activating Music Control (Safe Time)");
+      this.musicControlReady = true;
+      this.updateNotification();
+      
+      setTimeout(() => {
+          try {
+              // Cet appel lance la notif et le Foreground Service
+              MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
+          } catch (e) {
+              console.warn("[Audio] MusicControl start error", e);
+          }
+      }, 500);
+  }
+
+  // Appelé lors d'une nouvelle connexion pour éviter le conflit
+  public pauseFocus() {
+      console.log("[Audio] Pausing Focus for New Connection");
       try {
-          MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
-      } catch (e) {
-          console.warn("[Audio] MusicControl start error (Non-fatal)", e);
-      }
+          if (this.musicControlReady) {
+             MusicControl.updatePlayback({ state: MusicControl.STATE_PAUSED });
+          }
+      } catch (e) {}
+  }
+
+  public resumeFocus() {
+      console.log("[Audio] Resuming Focus");
+      if (!this.isSessionActive) return;
+      setTimeout(() => {
+          try {
+              if (this.musicControlReady) {
+                  MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
+              }
+          } catch (e) {}
+      }, 1000); // Délai de sécurité
   }
 
   public stopSession() {
       this.isSessionActive = false;
+      this.musicControlReady = false;
       try {
           MusicControl.stopControl();
       } catch (e) {}
@@ -114,6 +141,7 @@ class AudioService {
   }
 
   updateNotification() {
+      if (!this.musicControlReady) return;
       const isVox = this.mode === 'vox';
       headsetService.forceNotificationUpdate(isVox, this.isTx);
   }
@@ -153,6 +181,7 @@ class AudioService {
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
   
+  // Stubs
   muteIncoming(mute: boolean) {}
   playStream(remoteStream: MediaStream) {}
 }
