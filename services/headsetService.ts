@@ -1,18 +1,11 @@
-import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 import MusicControl, { Command } from 'react-native-music-control';
 
 const KEY_CODES = {
-    VOLUME_UP: 24, 
-    VOLUME_DOWN: 25, 
-    HEADSET_HOOK: 79,     
-    MEDIA_PLAY_PAUSE: 85, 
-    MEDIA_NEXT: 87, 
-    MEDIA_PREVIOUS: 88,
-    MEDIA_PLAY: 126, 
-    MEDIA_PAUSE: 127, 
-    MEDIA_STOP: 86,
-    MUTE: 91
+    VOLUME_UP: 24, VOLUME_DOWN: 25, HEADSET_HOOK: 79,     
+    MEDIA_PLAY_PAUSE: 85, MEDIA_NEXT: 87, MEDIA_PREVIOUS: 88,
+    MEDIA_PLAY: 126, MEDIA_PAUSE: 127, MEDIA_STOP: 86, MUTE: 91
 };
 
 type CommandCallback = (source: string) => void;
@@ -26,7 +19,7 @@ class HeadsetService {
     
     public isHeadsetConnected: boolean = false;
     private eventEmitter: NativeEventEmitter | null = null;
-    private subscription: EmitterSubscription | null = null;
+    private subscription: any = null;
 
     constructor() {}
 
@@ -40,44 +33,56 @@ class HeadsetService {
     private setupMusicControl() {
         MusicControl.enableBackgroundMode(true);
         
+        // On active TOUT pour être sûr de capter les clics
         MusicControl.enableControl('play', true);
         MusicControl.enableControl('pause', true);
         MusicControl.enableControl('stop', false);
         MusicControl.enableControl('nextTrack', true);
         MusicControl.enableControl('previousTrack', true);
+        MusicControl.enableControl('togglePlayPause', true); // Important pour certains casques
+
+        // Initialisation fictive
+        this.forceNotificationUpdate(false, false);
+
+        // Handlers
+        MusicControl.on(Command.play, () => { this.handleMediaAction('MEDIA_PLAY'); });
+        MusicControl.on(Command.pause, () => { this.handleMediaAction('MEDIA_PAUSE'); });
+        MusicControl.on(Command.togglePlayPause, () => { this.handleMediaAction('MEDIA_TOGGLE'); });
+        MusicControl.on(Command.nextTrack, () => this.handleMediaAction('MEDIA_NEXT'));
+        MusicControl.on(Command.previousTrack, () => this.handleMediaAction('MEDIA_PREV'));
+    }
+
+    // Appelée par audioService pour garder la notif à jour
+    public forceNotificationUpdate(isVox: boolean, isTx: boolean) {
+        const stateStr = isVox ? (isTx ? "TX EN COURS..." : "VOX ACTIF") : "MODE PTT";
         
         MusicControl.setNowPlaying({
             title: 'ComTac Radio',
             artwork: require('../assets/icon.png'), 
-            artist: 'PTT Actif',
-            color: 0x3b82f6,
+            artist: stateStr,
+            color: isTx ? 0xff0000 : 0x3b82f6,
             notificationIcon: 'ic_launcher'
         });
 
-        MusicControl.on(Command.play, () => { 
-            MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
-            this.triggerCommand('MEDIA_PLAY'); 
-        });
-        
-        MusicControl.on(Command.pause, () => { 
-            MusicControl.updatePlayback({ state: MusicControl.STATE_PAUSED });
-            this.triggerCommand('MEDIA_PAUSE'); 
-        });
-        
-        MusicControl.on(Command.nextTrack, () => this.triggerCommand('MEDIA_NEXT'));
-        MusicControl.on(Command.previousTrack, () => this.triggerCommand('MEDIA_PREV'));
-        
+        // On alterne Playing/Paused visuellement mais on force l'état interne pour garder le focus
         MusicControl.updatePlayback({
-            state: MusicControl.STATE_PLAYING,
+            state: isVox ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED,
             elapsedTime: 0
         });
     }
 
+    private handleMediaAction(action: string) {
+        console.log("[Headset] Media Action:", action);
+        // On renvoie la commande
+        this.triggerCommand(action);
+        
+        // On force un update pour montrer à l'OS qu'on a réagi
+        // (Sinon le bouton peut tourner dans le vide sur l'UI Android)
+        // L'update réel sera fait par audioService.updateNotification() en réponse au toggle
+    }
+
     private cleanup() {
-        if (this.subscription) {
-            this.subscription.remove();
-            this.subscription = null;
-        }
+        if (this.subscription) { this.subscription.remove(); this.subscription = null; }
         KeyEvent.removeKeyDownListener();
     }
 
@@ -87,12 +92,9 @@ class HeadsetService {
     private setupConnectionListener() {
         if (NativeModules.InCallManager) {
             this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
-            
             this.subscription = this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
                 let deviceObj = data;
-                if (typeof data === 'string') {
-                    try { deviceObj = JSON.parse(data); } catch (e) { return; }
-                }
+                if (typeof data === 'string') { try { deviceObj = JSON.parse(data); } catch (e) { return; } }
                 if (!deviceObj) return;
 
                 const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
@@ -108,19 +110,15 @@ class HeadsetService {
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                if (keyEvent.keyCode === KEY_CODES.VOLUME_DOWN) return;
-
-                if (keyEvent.keyCode === KEY_CODES.VOLUME_UP) {
+                if (keyEvent.keyCode === 25) return; // Vol Down ignored
+                if (keyEvent.keyCode === 24) { // Vol Up
                     const now = Date.now();
                     if (now - this.lastVolumeUpTime < 400) {
                         this.triggerCommand('DOUBLE_VOL_UP');
                         this.lastVolumeUpTime = 0;
-                    } else {
-                        this.lastVolumeUpTime = now;
-                    }
+                    } else { this.lastVolumeUpTime = now; }
                     return;
                 }
-
                 const validKeys = Object.values(KEY_CODES);
                 if (validKeys.includes(keyEvent.keyCode)) {
                     this.triggerCommand(`KEY_${keyEvent.keyCode}`);
