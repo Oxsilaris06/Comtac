@@ -1,18 +1,33 @@
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import KeyEvent from 'react-native-keyevent';
 import MusicControl, { Command } from 'react-native-music-control';
 
+const KEY_CODES = {
+    VOLUME_UP: 24, VOLUME_DOWN: 25, HEADSET_HOOK: 79,     
+    MEDIA_PLAY_PAUSE: 85, MEDIA_NEXT: 87, MEDIA_PREVIOUS: 88,
+    MEDIA_PLAY: 126, MEDIA_PAUSE: 127, MEDIA_STOP: 86, MUTE: 91
+};
+
 type CommandCallback = (source: string) => void;
+type ConnectionCallback = (isConnected: boolean, type: string) => void;
 
 class HeadsetService {
+    private lastVolumeUpTime: number = 0;
+    private lastCommandTime: number = 0;
     private onCommand?: CommandCallback;
+    private onConnectionChange?: ConnectionCallback;
     
-    // Sans module natif complexe, on suppose que c'est connecté.
-    // L'audio passera par le chemin système par défaut (Casque si connecté, HP sinon).
-    public isHeadsetConnected: boolean = true; 
+    public isHeadsetConnected: boolean = false;
+    private eventEmitter: NativeEventEmitter | null = null;
+    private subscription: any = null;
 
     constructor() {}
 
     public init() {
+        this.cleanup();
         this.setupMusicControl(); 
+        this.setupKeyEventListener();
+        this.setupConnectionListener();
     }
 
     private setupMusicControl() {
@@ -24,25 +39,20 @@ class HeadsetService {
         MusicControl.enableControl('stop', false);
         MusicControl.enableControl('nextTrack', true);
         MusicControl.enableControl('previousTrack', true);
-        
-        // "togglePlayPause" est crucial pour certains casques (AirPods)
-        MusicControl.enableControl('togglePlayPause', true); 
+        MusicControl.enableControl('togglePlayPause', true);
 
         MusicControl.setNowPlaying({
             title: 'ComTac',
             artwork: require('../assets/icon.png'), 
-            artist: 'Prêt',
+            artist: 'PTT Ready',
             color: 0x3b82f6,
             notificationIcon: 'ic_launcher',
-            isLiveStream: true // Empêche la barre de progression
+            isLiveStream: true
         });
 
         const handler = (action: string) => { 
-            console.log("[Headset] Event:", action);
-            if (this.onCommand) this.onCommand(action);
-            
-            // Astuce: On force toujours l'état PLAYING pour garder le focus
-            // Si on passe en PAUSED, certains téléphones rendent le focus au système
+            console.log("[Headset] MusicControl Event:", action);
+            this.triggerCommand(action);
             MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
         };
 
@@ -52,11 +62,7 @@ class HeadsetService {
         MusicControl.on(Command.nextTrack, () => handler('MEDIA_NEXT'));
         MusicControl.on(Command.previousTrack, () => handler('MEDIA_PREV'));
         
-        // État initial neutre mais actif
-        MusicControl.updatePlayback({ 
-            state: MusicControl.STATE_PLAYING,
-            elapsedTime: 0
-        });
+        MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
     }
 
     public forceNotificationUpdate(isVox: boolean, isTx: boolean) {
@@ -67,8 +73,56 @@ class HeadsetService {
         });
     }
 
+    private cleanup() {
+        if (this.subscription) { this.subscription.remove(); this.subscription = null; }
+        KeyEvent.removeKeyDownListener();
+    }
+
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
-    public setConnectionCallback(callback: any) {} 
+    public setConnectionCallback(callback: ConnectionCallback) { this.onConnectionChange = callback; }
+
+    private setupConnectionListener() {
+        if (NativeModules.InCallManager) {
+            this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
+            this.subscription = this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
+                let deviceObj = data;
+                if (typeof data === 'string') { try { deviceObj = JSON.parse(data); } catch (e) { return; } }
+                if (!deviceObj) return;
+                const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
+                const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece', 'Headset', 'CarAudio', 'USB_HEADSET', 'AuxLine'];
+                const connected = headsetTypes.some(t => current.includes(t)) && current !== 'Speaker' && current !== 'Phone';
+                this.isHeadsetConnected = connected;
+                if (this.onConnectionChange) this.onConnectionChange(connected, current);
+            });
+        }
+    }
+
+    private setupKeyEventListener() {
+        if (Platform.OS === 'android') {
+            KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
+                if (keyEvent.keyCode === 25) return; 
+                if (keyEvent.keyCode === 24) { 
+                    const now = Date.now();
+                    if (now - this.lastVolumeUpTime < 400) {
+                        this.triggerCommand('DOUBLE_VOL_UP');
+                        this.lastVolumeUpTime = 0;
+                    } else { this.lastVolumeUpTime = now; }
+                    return;
+                }
+                const validKeys = Object.values(KEY_CODES);
+                if (validKeys.includes(keyEvent.keyCode)) {
+                    this.triggerCommand(`KEY_${keyEvent.keyCode}`);
+                }
+            });
+        }
+    }
+
+    public triggerCommand(source: string) {
+        const now = Date.now();
+        if (now - this.lastCommandTime < 300) return;
+        this.lastCommandTime = now;
+        if (this.onCommand) this.onCommand(source);
+    }
 }
 
 export const headsetService = new HeadsetService();
