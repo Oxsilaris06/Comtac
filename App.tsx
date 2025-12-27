@@ -8,10 +8,11 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-// FIX: Import correct pour SDK 50 si on veut le nouveau CameraView
-// Si CameraView n'est pas trouvé, on fallback sur Legacy Camera
-// Mais ici, l'erreur est sur useCameraPermissions.
-import { Camera, useCameraPermissions } from 'expo-camera'; 
+
+// FIX: Import from 'expo-camera/next' for CameraView support in SDK 50
+// If this fails, we will revert to legacy 'Camera'
+import { CameraView, useCameraPermissions } from 'expo-camera/next';
+
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Battery from 'expo-battery';
@@ -38,7 +39,8 @@ const generateShortId = () => Math.random().toString(36).substring(2, 10).toUppe
 
 const App: React.FC = () => {
   useKeepAwake();
-  // Utilisation du hook de permissions
+  
+  // Hook from expo-camera/next
   const [permission, requestPermission] = useCameraPermissions();
 
   // --- CONFIGURATION ---
