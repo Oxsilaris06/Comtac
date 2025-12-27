@@ -19,7 +19,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Magnetometer } from 'expo-sensors';
 import NetInfo from '@react-native-community/netinfo';
 import { Audio } from 'expo-av';
-// RETRAIT DE INCALLMANAGER
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData, AppSettings, DEFAULT_SETTINGS } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
@@ -92,7 +91,6 @@ const App: React.FC = () => {
   }, []);
 
   const applySettings = (s: AppSettings) => {
-      // Logic audio output supprimée sans InCallManager (Android gère auto)
       if (gpsSubscription.current) {
           startGpsTracking(s.gpsUpdateInterval);
       }
@@ -118,7 +116,6 @@ const App: React.FC = () => {
 
   useEffect(() => {
       const unsubscribe = audioService.subscribe((mode) => {
-          console.log("[App] VOX State Update:", mode);
           setVoxActive(mode === 'vox');
       });
       return unsubscribe;
@@ -399,14 +396,18 @@ const App: React.FC = () => {
 
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
+    
     console.log("[App] Starting Services Sequence...");
+
     try {
         await checkAllPermissions();
+
         const audioInitResult = await audioService.init();
         if (!audioInitResult) {
             showToast("Erreur init audio - Réessayer", "error");
             return;
         }
+
         audioService.startMetering((state) => {
           const isTransmitting = state === 1;
           if (isTransmitting !== user.isTx) {
@@ -418,7 +419,9 @@ const App: React.FC = () => {
              });
           }
         });
+        
         const locationStatus = await Location.getForegroundPermissionsAsync();
+        
         if (locationStatus.granted) {
             try {
                 const initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -431,14 +434,19 @@ const App: React.FC = () => {
                     setGpsStatus('OK');
                 }
             } catch (e) { console.warn("[App] Initial GPS fix failed"); }
+
             startGpsTracking(settings.gpsUpdateInterval);
+            
         } else {
              setGpsStatus('ERROR');
              showToast("GPS non disponible", "error");
         }
+
         if (!permission?.granted) { requestPermission(); }
+
         setIsServicesReady(true);
         console.log("[App] Services Ready");
+
     } catch (e) {
         console.error("[App] Start Services Error", e);
         showToast("Erreur critique services", "error");
@@ -455,6 +463,7 @@ const App: React.FC = () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
+    
     setUser(prev => ({ ...prev, callsign: tri }));
     setView('menu');
   };
@@ -465,15 +474,23 @@ const App: React.FC = () => {
     setHostId(finalId);
     const role = OperatorRole.OPR;
     setUser(prev => ({ ...prev, role }));
+    
+    // CRASH FIX: On attend que l'audio soit prêt avant de lancer la connexion P2P
+    // et on sépare le démarrage audio de la connexion réseau
     audioService.startSession(`CANAL ${finalId}`);
-    initPeer(role, finalId);
-    setView('ops');
+
+    // Délai de sécurité pour laisser l'audio (MusicControl) prendre le focus
+    setTimeout(() => {
+        initPeer(role, finalId);
+        setView('ops');
+    }, 1500);
   };
 
   const handleScannerBarCodeScanned = ({ data }: any) => {
     setShowScanner(false);
     setHostInput(data);
-    setTimeout(() => joinSession(data), 500);
+    // Délai un peu plus long pour laisser le modal se fermer proprement
+    setTimeout(() => joinSession(data), 800);
   };
 
   // --- RENDERS ---
@@ -505,6 +522,7 @@ const App: React.FC = () => {
                 </TouchableOpacity>
             </View>
         </View>
+
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 20, backgroundColor: '#18181b', padding: 10, borderRadius: 8}}>
                 {isServicesReady ? (
                     <MaterialIcons name="check-circle" size={16} color="#22c55e" />
@@ -512,16 +530,22 @@ const App: React.FC = () => {
                     <ActivityIndicator size="small" color="#3b82f6" />
                 )}
                 <Text style={{color: '#71717a', fontSize: 10, marginRight: 10}}>SYS</Text>
+                
                 {gpsStatus === 'WAITING' && <MaterialIcons name="gps-not-fixed" size={16} color="#eab308" />}
                 {gpsStatus === 'OK' && <MaterialIcons name="gps-fixed" size={16} color="#22c55e" />}
                 <Text style={{color: '#71717a', fontSize: 10}}>GPS</Text>
         </View>
+
         <TouchableOpacity onPress={() => { 
             const role = OperatorRole.HOST; 
             setUser(prev => ({ ...prev, role })); 
             audioService.startSession("QG TACTIQUE");
-            initPeer(role); 
-            setView('ops'); 
+            
+            // Délai aussi pour l'hôte pour la cohérence
+            setTimeout(() => {
+                initPeer(role); 
+                setView('ops'); 
+            }, 1000);
         }} style={styles.menuCard}>
           <MaterialIcons name="add-circle" size={40} color="#3b82f6" />
           <View style={{marginLeft: 20}}>
@@ -547,6 +571,7 @@ const App: React.FC = () => {
     </SafeAreaView>
   );
 
+  // ... (renderDashboard et le reste restent identiques) ...
   const renderDashboard = () => (
     <View style={{flex: 1}}>
       <View style={{backgroundColor: '#09090b'}}>
@@ -698,6 +723,8 @@ const App: React.FC = () => {
   return (
     <View style={styles.container}>
       <StatusBar style="light" backgroundColor="#000" />
+      
+      {/* Intégration du modal Consentement avec état checké */}
       <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
 
       {view === 'login' ? renderLogin() :
@@ -705,7 +732,7 @@ const App: React.FC = () => {
        view === 'settings' ? <SettingsView onClose={() => setView('menu')} /> :
        renderDashboard()}
 
-      {/* MODALES */}
+      {/* ... MODALES inchangées ... */}
       <Modal 
         visible={!!selectedOperatorId} 
         animationType="fade" 
