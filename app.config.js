@@ -40,7 +40,7 @@ module.exports = function(config) {
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
                 "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK", // CRITIQUE POUR MUSIC CONTROL
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK", 
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                 "android.permission.WAKE_LOCK",
                 "android.permission.BATTERY_STATS",
@@ -94,7 +94,6 @@ function withMusicControlManifest(config) {
         if (!mainApplication['service']) mainApplication['service'] = [];
         mainApplication['service'].push(mcService);
     }
-    // IMPORTANT: On combine mediaPlayback et microphone pour essayer de garder le micro en vie
     mcService.$['android:foregroundServiceType'] = 'mediaPlayback|microphone'; 
 
     return config;
@@ -217,7 +216,7 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || 
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE || 
-                keyCode == KeyEvent.KEYCODE_MEDIA_MUTE) { // Correction constante MUTE
+                keyCode == KeyEvent.KEYCODE_MUTE) { // CORRIGÉ ICI
                 
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
