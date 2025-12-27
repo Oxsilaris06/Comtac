@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
-  return withCallKeepManifestFix(
+  return withServicesManifestFix( // CHANGEMENT DE NOM POUR INCLURE MUSIC CONTROL
     withAccessibilityService(
       withKeyEventBuildGradleFix(
         withMainActivityInjection(
@@ -40,7 +40,7 @@ module.exports = function(config) {
                 "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_COARSE_LOCATION",
                 "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK", // CRITIQUE
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                 "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
                 "android.permission.WAKE_LOCK",
@@ -76,7 +76,6 @@ module.exports = function(config) {
                   }
                 }
               ]
-              // RETRAIT DU PLUGIN WEBRTC CONFLICTUEL
             ]
           }
         )
@@ -85,39 +84,50 @@ module.exports = function(config) {
   );
 };
 
-// --- FIX CALLKEEP ANDROID 14 ---
-function withCallKeepManifestFix(config) {
+// --- FIX SERVICES ANDROID 14 (CALLKEEP + MUSIC CONTROL) ---
+function withServicesManifestFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
-    const connectionServiceName = 'io.wazo.callkeep.VoiceConnectionService';
-    let connectionService = mainApplication['service']?.find(s => s.$['android:name'] === connectionServiceName);
-    if (!connectionService) {
-        connectionService = { $: { 'android:name': connectionServiceName } };
+    
+    // 1. CALLKEEP SERVICE (Phone Call)
+    const callKeepService = 'io.wazo.callkeep.VoiceConnectionService';
+    let ckService = mainApplication['service']?.find(s => s.$['android:name'] === callKeepService);
+    if (!ckService) {
+        ckService = { $: { 'android:name': callKeepService } };
         if (!mainApplication['service']) mainApplication['service'] = [];
-        mainApplication['service'].push(connectionService);
+        mainApplication['service'].push(ckService);
     }
-    connectionService.$['android:permission'] = 'android.permission.BIND_TELECOM_CONNECTION_SERVICE';
-    connectionService.$['android:exported'] = 'true';
-    connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
-    
-    if (!connectionService['intent-filter']) {
-        connectionService['intent-filter'] = [{
-            action: [{ $: { 'android:name': 'android.telecom.ConnectionService' } }]
-        }];
+    ckService.$['android:permission'] = 'android.permission.BIND_TELECOM_CONNECTION_SERVICE';
+    ckService.$['android:exported'] = 'true';
+    ckService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
+    if (!ckService['intent-filter']) {
+        ckService['intent-filter'] = [{ action: [{ $: { 'android:name': 'android.telecom.ConnectionService' } }] }];
     }
-    
-    const bgServiceName = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
-    let bgService = mainApplication['service']?.find(s => s.$['android:name'] === bgServiceName);
-    if (!bgService) {
-        bgService = { $: { 'android:name': bgServiceName } };
-        mainApplication['service'].push(bgService);
+
+    // 2. CALLKEEP BACKGROUND SERVICE
+    const ckBgService = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
+    let ckBService = mainApplication['service']?.find(s => s.$['android:name'] === ckBgService);
+    if (!ckBService) {
+        ckBService = { $: { 'android:name': ckBgService } };
+        mainApplication['service'].push(ckBService);
     }
-    bgService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
+    ckBService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
+
+    // 3. MUSIC CONTROL SERVICE (Media Playback - CRITIQUE POUR ÉVITER LE CRASH)
+    const musicService = 'com.tanguyantoine.react.MusicControlNotification.MusicControlNotificationService';
+    let mcService = mainApplication['service']?.find(s => s.$['android:name'] === musicService);
+    if (!mcService) {
+        mcService = { $: { 'android:name': musicService } };
+        mainApplication['service'].push(mcService);
+    }
+    // C'est ce flag qui autorise la notif musique en même temps que l'appel
+    mcService.$['android:foregroundServiceType'] = 'mediaPlayback'; 
+
     return config;
   });
 }
 
-// --- INJECTION KEYEVENT (Standard - Pas d'interception bloquante) ---
+// --- INJECTION KEYEVENT ---
 function withMainActivityInjection(config) {
   return withMainActivity(config, async (config) => {
     let src = config.modResults.contents;
@@ -151,7 +161,6 @@ function withMainActivityInjection(config) {
     }
   }
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-    // On laisse passer les events au système (pour MusicControl)
     if (event.action == KeyEvent.ACTION_DOWN) {
        if (KeyEventModule.getInstance() != null) {
            KeyEventModule.getInstance().onKeyDownEvent(event.keyCode, event)
@@ -180,7 +189,6 @@ function withMainActivityInjection(config) {
   });
 }
 
-// --- SERVICE ACCESSIBILITÉ ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
@@ -234,7 +242,6 @@ public class ComTacAccessibilityService extends AccessibilityService {
                 keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
                 keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE || 
                 keyCode == KeyEvent.KEYCODE_MUTE) {
-                
                 Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
