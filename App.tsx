@@ -8,8 +8,10 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-// Import CAMERA next
-import { CameraView, useCameraPermissions } from 'expo-camera/next';
+
+// FIX ECRAN BLANC: Retour à l'import legacy stable
+import { Camera } from 'expo-camera'; 
+
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Battery from 'expo-battery';
@@ -34,7 +36,9 @@ const generateShortId = () => Math.random().toString(36).substring(2, 10).toUppe
 
 const App: React.FC = () => {
   useKeepAwake();
-  const [permission, requestPermission] = useCameraPermissions();
+  
+  // Utilisation de la méthode legacy pour les permissions
+  const [permission, requestPermission] = Camera.useCameraPermissions();
 
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [user, setUser] = useState<UserData>({
@@ -61,6 +65,7 @@ const App: React.FC = () => {
   const [showPings, setShowPings] = useState(true);
   
   const [voxActive, setVoxActive] = useState(false);
+  
   const [showQRModal, setShowQRModal] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPingModal, setShowPingModal] = useState(false);
@@ -70,6 +75,7 @@ const App: React.FC = () => {
 
   const [hasConsent, setHasConsent] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  
   const [isServicesReady, setIsServicesReady] = useState(false);
   const [gpsStatus, setGpsStatus] = useState<'WAITING' | 'OK' | 'ERROR'>('WAITING');
 
@@ -159,7 +165,7 @@ const App: React.FC = () => {
   const mergePeer = useCallback((newPeer: UserData) => {
     setPeers(prev => {
         const next = { ...prev };
-        if (newPeer.id === user.id) return next; // Anti-Echo
+        if (newPeer.id === user.id) return next; 
         const oldId = Object.keys(next).find(key => next[key].callsign === newPeer.callsign && key !== newPeer.id);
         if (oldId) delete next[oldId];
         next[newPeer.id] = newPeer;
@@ -177,11 +183,7 @@ const App: React.FC = () => {
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
-        if (list.length > 0) { 
-            list.forEach((u: UserData) => { 
-                if(u.id && u.id !== user.id) mergePeer(u); 
-            }); 
-        }
+        if (list.length > 0) { list.forEach((u: UserData) => { if(u.id && u.id !== user.id) mergePeer(u); }); }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
       case 'PING':
@@ -307,7 +309,7 @@ const App: React.FC = () => {
     conn.on('open', () => {
       showToast(`CONNECTÉ À ${targetId}`);
       
-      // CRASH FIX: On démarre l'audio maintenant
+      // On lance l'audio session
       audioService.startSession(`CANAL ${targetId}`);
       
       conn.send({ type: 'FULL', user: user });
@@ -348,7 +350,6 @@ const App: React.FC = () => {
                 PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
                 PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
                 PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-                // Pas de CALL_PHONE ici, on est en mode média pur
             ];
 
             if (Platform.Version >= 33) {
@@ -365,14 +366,11 @@ const App: React.FC = () => {
             }
 
             const results = await PermissionsAndroid.requestMultiple(permsToRequest);
-            console.log('[Permissions] Results:', results);
             
             if (results[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] !== PermissionsAndroid.RESULTS.GRANTED) {
                 showToast("Microphone refusé - Audio inactif", "error");
             }
-        } catch (err) {
-            console.warn("[Permissions] Error requesting multiple permissions", err);
-        }
+        } catch (err) {}
       }
   };
 
@@ -403,7 +401,6 @@ const App: React.FC = () => {
 
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
-    console.log("[App] Starting Services Sequence...");
     try {
         await checkAllPermissions();
         const audioInitResult = await audioService.init();
@@ -434,7 +431,7 @@ const App: React.FC = () => {
                     }));
                     setGpsStatus('OK');
                 }
-            } catch (e) { console.warn("[App] Initial GPS fix failed"); }
+            } catch (e) {}
             startGpsTracking(settings.gpsUpdateInterval);
         } else {
              setGpsStatus('ERROR');
@@ -442,9 +439,7 @@ const App: React.FC = () => {
         }
         if (!permission?.granted) { requestPermission(); }
         setIsServicesReady(true);
-        console.log("[App] Services Ready");
     } catch (e) {
-        console.error("[App] Start Services Error", e);
         showToast("Erreur critique services", "error");
     }
   };
@@ -470,14 +465,11 @@ const App: React.FC = () => {
     const role = OperatorRole.OPR;
     setUser(prev => ({ ...prev, role }));
     
-    // Modification: On lance l'audio seulement au moment du connectToHost (success)
-    // audioService.startSession(`CANAL ${finalId}`);
-
-    // Délai réduit car on attend l'événement 'open' pour lancer la musique
+    // Décalage pour laisser l'UI souffler
     setTimeout(() => {
         initPeer(role, finalId);
         setView('ops');
-    }, 500);
+    }, 100);
   };
 
   const handleScannerBarCodeScanned = ({ data }: any) => {
@@ -530,11 +522,8 @@ const App: React.FC = () => {
             const role = OperatorRole.HOST; 
             setUser(prev => ({ ...prev, role })); 
             audioService.startSession("QG TACTIQUE");
-            
-            setTimeout(() => {
-                initPeer(role); 
-                setView('ops'); 
-            }, 500);
+            initPeer(role); 
+            setView('ops'); 
         }} style={styles.menuCard}>
           <MaterialIcons name="add-circle" size={40} color="#3b82f6" />
           <View style={{marginLeft: 20}}>
