@@ -1,86 +1,89 @@
-const { withAndroidManifest, withMainActivity, withDangerousMod, withStringsXml, withAppBuildGradle } = require('@expo/config-plugins');
+const { withAndroidManifest, withMainActivity, withDangerousMod, withStringsXml, withAppBuildGradle, withProjectBuildGradle } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
 module.exports = function(config) {
-  return withHeadsetModule(
-    withMediaSessionGradle(
-      withCallKeepManifestFix(
-        withAccessibilityService(
-          withKeyEventBuildGradleFix(
-            withMainActivityInjection(
-              {
-                name: "COM TAC v14",
-                slug: "comtac-v14",
-                version: "1.0.0",
-                orientation: "portrait",
-                icon: "./assets/icon.png",
-                userInterfaceStyle: "light",
-                splash: {
-                  image: "./assets/splash.png",
-                  resizeMode: "contain",
-                  backgroundColor: "#000000"
-                },
-                assetBundlePatterns: ["**/*"],
-                ios: {
-                  supportsTablet: true,
-                  infoPlist: {
-                    UIBackgroundModes: ["audio", "voip", "fetch"]
-                  }
-                },
-                android: {
-                  adaptiveIcon: {
-                    foregroundImage: "./assets/adaptive-icon.png",
+  return withRepoFix(
+    withHeadsetModule(
+      withMediaSessionGradle(
+        withCallKeepManifestFix(
+          withAccessibilityService(
+            withKeyEventBuildGradleFix(
+              withMainActivityInjection(
+                {
+                  name: "COM TAC v14",
+                  slug: "comtac-v14",
+                  version: "1.0.0",
+                  orientation: "portrait",
+                  icon: "./assets/icon.png",
+                  userInterfaceStyle: "light",
+                  splash: {
+                    image: "./assets/splash.png",
+                    resizeMode: "contain",
                     backgroundColor: "#000000"
                   },
-                  package: "com.tactical.comtac",
-                  permissions: [
-                    "android.permission.INTERNET",
-                    "android.permission.ACCESS_NETWORK_STATE",
-                    "android.permission.CAMERA",
-                    "android.permission.RECORD_AUDIO",
-                    "android.permission.ACCESS_FINE_LOCATION",
-                    "android.permission.ACCESS_COARSE_LOCATION",
-                    "android.permission.FOREGROUND_SERVICE",
-                    "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-                    "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-                    "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
-                    "android.permission.WAKE_LOCK",
-                    "android.permission.BATTERY_STATS",
-                    "android.permission.SYSTEM_ALERT_WINDOW",
-                    "android.permission.REORDER_TASKS",
-                    "android.permission.BLUETOOTH",
-                    "android.permission.BLUETOOTH_CONNECT",
-                    "android.permission.BLUETOOTH_SCAN",
-                    "android.permission.MODIFY_AUDIO_SETTINGS",
-                    "android.permission.ACTIVITY_RECOGNITION",
-                    "android.permission.BIND_ACCESSIBILITY_SERVICE",
-                    "android.permission.MANAGE_OWN_CALLS",
-                    "android.permission.READ_PHONE_STATE",
-                    "android.permission.CALL_PHONE",
-                    "android.permission.POST_NOTIFICATIONS" 
-                  ]
-                },
-                plugins: [
-                  ["expo-camera", { cameraPermission: "Allow camera", microphonePermission: "Allow mic" }],
-                  ["expo-location", { locationAlwaysAndWhenInUsePermission: "Allow location" }],
-                  [
-                    "expo-build-properties", 
-                    { 
-                      android: { 
-                        minSdkVersion: 24, 
-                        compileSdkVersion: 34, 
-                        buildToolsVersion: "34.0.0",
-                        targetSdkVersion: 33 
-                      },
-                      ios: {
-                        deploymentTarget: "13.4"
-                      }
+                  assetBundlePatterns: ["**/*"],
+                  ios: {
+                    supportsTablet: true,
+                    infoPlist: {
+                      UIBackgroundModes: ["audio", "voip", "fetch"]
                     }
-                  ],
-                  "@config-plugins/react-native-webrtc"
-                ]
-              }
+                  },
+                  android: {
+                    adaptiveIcon: {
+                      foregroundImage: "./assets/adaptive-icon.png",
+                      backgroundColor: "#000000"
+                    },
+                    package: "com.tactical.comtac",
+                    permissions: [
+                      "android.permission.INTERNET",
+                      "android.permission.ACCESS_NETWORK_STATE",
+                      "android.permission.CAMERA",
+                      "android.permission.RECORD_AUDIO",
+                      "android.permission.ACCESS_FINE_LOCATION",
+                      "android.permission.ACCESS_COARSE_LOCATION",
+                      "android.permission.FOREGROUND_SERVICE",
+                      "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+                      "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+                      "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+                      "android.permission.WAKE_LOCK",
+                      "android.permission.BATTERY_STATS",
+                      "android.permission.SYSTEM_ALERT_WINDOW",
+                      "android.permission.REORDER_TASKS",
+                      "android.permission.BLUETOOTH",
+                      "android.permission.BLUETOOTH_CONNECT",
+                      "android.permission.BLUETOOTH_SCAN",
+                      "android.permission.MODIFY_AUDIO_SETTINGS",
+                      "android.permission.ACTIVITY_RECOGNITION",
+                      "android.permission.BIND_ACCESSIBILITY_SERVICE",
+                      "android.permission.MANAGE_OWN_CALLS",
+                      "android.permission.READ_PHONE_STATE",
+                      "android.permission.CALL_PHONE",
+                      "android.permission.POST_NOTIFICATIONS" 
+                    ]
+                  },
+                  plugins: [
+                    ["expo-camera", { cameraPermission: "Allow camera", microphonePermission: "Allow mic" }],
+                    ["expo-location", { locationAlwaysAndWhenInUsePermission: "Allow location" }],
+                    [
+                      "expo-build-properties", 
+                      { 
+                        android: { 
+                          minSdkVersion: 24, 
+                          compileSdkVersion: 34, 
+                          buildToolsVersion: "34.0.0",
+                          targetSdkVersion: 33,
+                          kotlinVersion: "1.9.23" // Force une version Kotlin stable pour RN 0.74
+                        },
+                        ios: {
+                          deploymentTarget: "13.4"
+                        }
+                      }
+                    ],
+                    "@config-plugins/react-native-webrtc"
+                  ]
+                }
+              )
             )
           )
         )
@@ -88,6 +91,29 @@ module.exports = function(config) {
     )
   );
 };
+
+// --- FIX CRITIQUE: Dépôts Maven/Google/Jitpack ---
+function withRepoFix(config) {
+  return withProjectBuildGradle(config, (config) => {
+    const { modResults } = config;
+    if (modResults.language === 'groovy') {
+      // On injecte Jitpack et on s'assure que google/mavenCentral sont là dans allprojects
+      // Cela corrige souvent les erreurs 403 ou les dépendances introuvables
+      if (!modResults.contents.includes("jitpack.io")) {
+        modResults.contents = modResults.contents.replace(
+          /allprojects\s*{\s*repositories\s*{/,
+          `allprojects {
+        repositories {
+            maven { url 'https://www.jitpack.io' }
+            maven { url 'https://maven.google.com' }
+            mavenCentral()
+            google()`
+        );
+      }
+    }
+    return config;
+  });
+}
 
 // --- 1. AJOUT DÉPENDANCE ANDROIDX MEDIA ---
 function withMediaSessionGradle(config) {
@@ -144,13 +170,11 @@ public class HeadsetModule extends ReactContextBaseJavaModule {
         try {
             mediaSession = new MediaSessionCompat(reactContext, "ComTacSession");
             
-            // On déclare qu'on gère TOUT pour essayer de voler la priorité à CallKeep
             mediaSession.setFlags(
                 MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS | 
                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
             );
 
-            // On simule une lecture active (Buffering permet de garder le focus sans jouer de son)
             PlaybackStateCompat state = new PlaybackStateCompat.Builder()
                 .setActions(
                     PlaybackStateCompat.ACTION_PLAY | 
@@ -170,14 +194,12 @@ public class HeadsetModule extends ReactContextBaseJavaModule {
                 public boolean onMediaButtonEvent(Intent mediaButtonEvent) {
                     KeyEvent keyEvent = mediaButtonEvent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
                     if (keyEvent != null && keyEvent.getAction() == KeyEvent.ACTION_DOWN) {
-                        
-                        // Envoi de l'événement à React Native
                         if (reactContext.hasActiveCatalystInstance()) {
                             reactContext
                                 .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
                                 .emit("COMTAC_MEDIA_EVENT", keyEvent.getKeyCode());
                         }
-                        return true; // CRITIQUE: Retourne TRUE pour bloquer l'OS
+                        return true;
                     }
                     return super.onMediaButtonEvent(mediaButtonEvent);
                 }
@@ -231,17 +253,6 @@ public class HeadsetPackage implements ReactPackage {
   ]);
 }
 
-// --- 3. ENREGISTREMENT DU PACKAGE DANS MAINAPPLICATION ---
-function withMainActivityInjection(config) {
-  return withMainActivity(config, async (config) => {
-    let src = config.modResults.contents;
-    // Ajout du Package dans MainApplication (pas MainActivity cette fois, car c'est un Package)
-    // Note: Expo gère cela automatiquement si c'est un vrai module npm, mais ici c'est manuel
-    // Astuce: On va utiliser le hook MainApplication d'Expo
-    return config;
-  });
-}
-
 // --- FIX CALLKEEP ---
 function withCallKeepManifestFix(config) {
   return withAndroidManifest(config, async (config) => {
@@ -257,9 +268,6 @@ function withCallKeepManifestFix(config) {
     connectionService.$['android:exported'] = 'true';
     connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
     
-    // IMPORTANT: On supprime l'IntentFilter de CallKeep pour MEDIA_BUTTON s'il existe
-    // pour éviter qu'il ne vole la priorité à notre Module
-    
     const bgServiceName = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
     let bgService = mainApplication['service']?.find(s => s.$['android:name'] === bgServiceName);
     if (!bgService) {
@@ -271,8 +279,7 @@ function withCallKeepManifestFix(config) {
   });
 }
 
-// --- ENREGISTREMENT MANUEL DU PACKAGE (Hook dangerousMod sur MainApplication.kt/java) ---
-// C'est l'étape délicate avec Expo Prebuild : ajouter le package à la liste
+// --- ENREGISTREMENT MANUEL DU PACKAGE ---
 function withMainActivityInjection(config) {
     return withDangerousMod(config, [
         'android',
@@ -283,7 +290,6 @@ function withMainActivityInjection(config) {
             if (fs.existsSync(appPath)) {
                 let content = fs.readFileSync(appPath, 'utf8');
                 if (!content.includes('new HeadsetPackage()') && !content.includes('HeadsetPackage()')) {
-                    // Injection barbare mais efficace pour Expo
                     if (isKotlin) {
                         content = content.replace('PackageList(this).packages', 'PackageList(this).packages.apply { add(HeadsetPackage()) }');
                     } else {
