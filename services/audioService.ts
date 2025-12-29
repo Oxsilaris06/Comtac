@@ -10,7 +10,6 @@ class AudioService {
   isTx: boolean = false;
   mode: 'ptt' | 'vox' = 'ptt';
   
-  // VAD
   private noiseFloor: number = -60;
   private voxHoldTime: number = 1000; 
   private voxTimer: any = null;
@@ -23,9 +22,8 @@ class AudioService {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Initializing (Stable Mode)...");
+      console.log("[Audio] Initializing (Stable)...");
 
-      // 1. Setup Headset
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Cmd:", source);
           this.toggleVox(); 
@@ -35,14 +33,11 @@ class AudioService {
       });
       headsetService.init();
 
-      // 2. Audio Config (InCallManager)
       try {
-          // On n'active pas l'audio tout de suite pour éviter le crash
-          // On le prépare juste
+          // Préparation Audio sans forcer le mode tout de suite
           InCallManager.setKeepScreenOn(true);
       } catch (e) { console.warn("InCallManager error", e); }
 
-      // 3. Micro
       try {
         const stream = await mediaDevices.getUserMedia({ 
             audio: {
@@ -75,21 +70,20 @@ class AudioService {
       this.isSessionActive = true;
       this.updateNotification();
 
-      // CRASH FIX: On attend que la connexion soit établie (via le délai dans App.tsx)
-      // pour activer InCallManager et MusicControl
-      try {
-          InCallManager.start({ media: 'video' }); // 'video' mode est moins agressif que 'audio'
-          this.enforceAudioRoute();
-      } catch(e) {}
-      
-      // On lance le service MusicControl après un délai
+      // CRASH FIX: Délai de sécurité pour laisser WebRTC s'établir
+      // avant de prendre le contrôle audio complet
       setTimeout(() => {
           if (this.isSessionActive) {
+              try {
+                  InCallManager.start({ media: 'video' }); 
+                  this.enforceAudioRoute();
+              } catch(e) {}
+              
               try {
                   MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
               } catch (e) {}
           }
-      }, 1000);
+      }, 1500);
   }
 
   public stopSession() {
