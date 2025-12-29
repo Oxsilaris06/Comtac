@@ -33,8 +33,7 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      # --- ETAPE CRITIQUE AJOUTÉE : GÉNÉRATION DU BUNDLE JS ---
-      # C'est ce qui manque et cause votre erreur "Unable to load script"
+      # --- ETAPE CRITIQUE : GÉNÉRATION DU BUNDLE JS ---
       - name: Force Bundle JS
         run: |
           mkdir -p android/app/src/main/assets
@@ -45,16 +44,18 @@ jobs:
             --bundle-output android/app/src/main/assets/index.android.bundle \
             --assets-dest android/app/src/main/res
 
-      - name: Fix Gradle Wrapper (Force 8.7-bin)
+      # FIX: Use Gradle 8.6 instead of 8.7 (Better compatibility with RN 0.74)
+      - name: Fix Gradle Wrapper (Force 8.6-bin)
         run: |
           cd android/gradle/wrapper
-          sed -i 's/distributionUrl=.*$/distributionUrl=https\:\/\/services.gradle.org\/distributions\/gradle-8.7-bin.zip/g' gradle-wrapper.properties
+          sed -i 's/distributionUrl=.*$/distributionUrl=https\:\/\/services.gradle.org\/distributions\/gradle-8.6-bin.zip/g' gradle-wrapper.properties
 
       - name: Build Android APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon
+          # Ajout de --stacktrace pour debug si nécessaire
+          ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4608m -XX:MaxMetaspaceSize=1024m" --no-daemon --stacktrace
 
       - name: Télécharger l'APK
         uses: actions/upload-artifact@v4
