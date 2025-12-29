@@ -13,7 +13,6 @@ class AudioService {
   isTx: boolean = false;
   mode: 'ptt' | 'vox' = 'ptt';
   
-  // On remplace l'ID d'appel par un simple flag de session
   isSessionActive: boolean = false;
   
   voxThreshold: number = -35; 
@@ -29,12 +28,27 @@ class AudioService {
     try {
       console.log("[Audio] Initializing...");
 
-      // 1. Initialisation Headset
+      // 1. Initialisation des services de bas niveau
       headsetService.init();
+      
+      // Configuration des callbacks Focus (Gestion des interruptions)
+      focusService.setCallbacks(
+          () => { 
+              console.log("[Audio] Focus LOST -> Stopping TX");
+              this.setTx(false); // Sécurité immédiate
+          },
+          () => {
+              console.log("[Audio] Focus GAINED -> Ready");
+              if (this.isSessionActive) this.enforceAudioRoute();
+          }
+      );
 
+      // Listener Commandes Physiques
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Headset Native Command:", source);
+          // Si on reçoit une commande, c'est qu'on a le contrôle
           if (this.isSessionActive) this.enforceAudioRoute();
+          this.toggleVox();
       });
       
       headsetService.setConnectionCallback((isConnected, type) => { 
@@ -42,25 +56,10 @@ class AudioService {
           this.handleRouteUpdate(isConnected, type); 
       });
 
-      // 2. Configuration du gestionnaire de Focus Audio
-      focusService.setCallbacks(
-          // On Focus Lost (Interruption)
-          () => {
-              console.log("[Audio] Focus LOST - Pausing Transmission");
-              this.setTx(false); // Couper immédiatement l'émission
-              // On pourrait aussi arrêter InCallManager temporairement si nécessaire
-          },
-          // On Focus Gained (Reprise)
-          () => {
-              console.log("[Audio] Focus GAINED - Ready");
-              if (this.isSessionActive) this.enforceAudioRoute();
-          }
-      );
-
-      // 3. Configuration de MusicControl (La session "Gagnante")
+      // 2. Music Control
       this.setupMusicControl();
 
-      // 4. Préparation du Micro
+      // 3. Préparation Micro
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
@@ -82,10 +81,11 @@ class AudioService {
     }
   }
 
-  // --- GESTION ROUTAGE AUDIO (CRITIQUE POUR BLUETOOTH) ---
+  // --- GESTION ROUTAGE AUDIO (Améliorée) ---
   private enforceAudioRoute() {
+      // Cette fonction doit être appelée souvent pour contrer les changements de l'OS
       if (headsetService.isHeadsetConnected) {
-          console.log("[Audio] Enforcing Bluetooth SCO");
+          console.log("[Audio] Enforcing Bluetooth SCO (High Priority)");
           InCallManager.setForceSpeakerphoneOn(false);
           InCallManager.chooseAudioRoute('Bluetooth'); 
       } else {
@@ -94,20 +94,16 @@ class AudioService {
       }
   }
 
-  // --- MUSIC CONTROL (Notification & Boutons) ---
+  // --- MUSIC CONTROL ---
   private setupMusicControl() {
       MusicControl.enableBackgroundMode(true);
-      
-      // Mappage complet des boutons possibles sur un casque
       MusicControl.enableControl('play', true);
       MusicControl.enableControl('pause', true);
       MusicControl.enableControl('stop', true);
       MusicControl.enableControl('nextTrack', true);     
       MusicControl.enableControl('previousTrack', true); 
-      // togglePlayPause est crucial pour beaucoup de casques mono-bouton
       MusicControl.enableControl('togglePlayPause', true); 
 
-      // Une seule action : Basculer le mode VOX
       const triggerSwitch = () => {
           console.log("[Audio] MusicControl Command Received");
           this.toggleVox();
@@ -118,10 +114,7 @@ class AudioService {
       MusicControl.on(Command.togglePlayPause, triggerSwitch);
       MusicControl.on(Command.nextTrack, triggerSwitch);
       MusicControl.on(Command.previousTrack, triggerSwitch);
-      
       MusicControl.on(Command.stop, () => { this.stopSession(); });
-      
-      // Gestion du "Canardage" (Audio Focus Loss - ex: appel téléphonique entrant, GPS)
       MusicControl.on(Command.closeNotification, () => { this.stopSession(); });
   }
 
@@ -129,28 +122,28 @@ class AudioService {
       if (this.isSessionActive) return;
       
       try {
-        console.log("[Audio] Starting Audio Session (Music Mode)");
+        console.log("[Audio] Starting Audio Session...");
         
-        // --- ETAPE CRITIQUE : DEMANDE DE FOCUS NATIF ---
+        // 1. DEMANDE DE FOCUS EXPLICITE (CRITIQUE)
+        // On demande le focus AVANT de lancer l'audio VoIP
         const focusGranted = await focusService.requestFocus();
         if (!focusGranted) {
-            console.warn("[Audio] Could not acquire Native Audio Focus!");
-            // On continue quand même, mais c'est risqué
+            console.warn("[Audio] Focus request denied by OS");
+            // On continue quand même, mais avec risque
         }
 
         this.isSessionActive = true;
-
-        // Init initial de la notif
         this.updateNotification(roomName);
 
-        // Activer le moteur Audio VoIP
+        // 2. Démarrage du moteur VoIP
+        // Le mode 'audio' peut parfois basculer le mode Android en MODE_IN_COMMUNICATION
+        // Ce qui est nécessaire pour le Bluetooth SCO (Micro)
         InCallManager.start({ media: 'audio' });
         InCallManager.setKeepScreenOn(true);
         
-        // Forcer le routage
-        setTimeout(() => {
-            this.enforceAudioRoute();
-        }, 500);
+        // 3. Routage agressif
+        setTimeout(() => { this.enforceAudioRoute(); }, 500);
+        setTimeout(() => { this.enforceAudioRoute(); }, 1500); // 2eme passe de sécurité
 
       } catch (e) {
           console.error("[Audio] CRITICAL: Failed to start session", e);
@@ -171,15 +164,15 @@ class AudioService {
       try {
         MusicControl.stopControl();
         InCallManager.stop();
-        // --- LIBÉRATION DU FOCUS ---
-        focusService.abandonFocus();
+        focusService.abandonFocus(); // On rend la main proprement
       } catch(e) {}
       this.isSessionActive = false;
       this.setTx(false);
   }
 
   private handleRouteUpdate(isConnected: boolean, type: string) {
-      this.enforceAudioRoute();
+      // Si un nouveau périphérique arrive, on force le routage immédiatement
+      setTimeout(() => this.enforceAudioRoute(), 500);
   }
 
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
@@ -198,10 +191,7 @@ class AudioService {
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
     
-    // IMPORTANT : On met à jour la notif pour refléter l'état
-    // Cela permet au bouton du casque de savoir s'il doit envoyer "Pause" ou "Play" la prochaine fois
     this.updateNotification();
-    
     this.notifyListeners(); 
     return this.mode === 'vox'; 
   }
@@ -210,7 +200,6 @@ class AudioService {
       if (!this.isSessionActive) return;
       
       const isVox = this.mode === 'vox';
-      // État visuel et LOGIQUE (Playing = VOX ON, Paused = PTT/VOX OFF)
       const playbackState = isVox ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED;
       
       MusicControl.setNowPlaying({
@@ -221,7 +210,7 @@ class AudioService {
           genre: 'Tactical',
           duration: 0,
           description: isVox ? 'Parlez pour transmettre' : 'Appuyez pour parler',
-          color: isVox ? 0xFFef4444 : 0xFF3b82f6, // Rouge si VOX actif, Bleu sinon
+          color: isVox ? 0xFFef4444 : 0xFF3b82f6,
           isLiveStream: true,
       });
 
@@ -247,24 +236,16 @@ class AudioService {
 
   setTx(state: boolean) {
     if (this.isTx === state) return;
-    
-    // Sécurité Focus : Si on n'a pas le focus, interdiction de transmettre
-    if (state && !focusService.hasFocus()) {
-        console.warn("[Audio] Cannot TX: No Audio Focus");
-        return;
-    }
-
     this.isTx = state;
     
     if (this.stream) {
         this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
     
-    // Petit feedback visuel dans la notif si on passe en émission
     if (this.isSessionActive && this.mode === 'vox') {
          MusicControl.updatePlayback({
              state: MusicControl.STATE_PLAYING,
-             speed: state ? 1.1 : 1.0, // Hack pour forcer un refresh UI mineur
+             speed: state ? 1.1 : 1.0, 
              elapsedTime: 0
          });
     }
