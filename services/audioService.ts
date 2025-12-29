@@ -2,11 +2,10 @@ import { mediaDevices, MediaStream } from 'react-native-webrtc';
 import { Platform } from 'react-native';
 import RNSoundLevel from 'react-native-sound-level';
 import MusicControl, { Command } from 'react-native-music-control';
-import uuid from 'react-native-uuid';
 import { VolumeManager } from 'react-native-volume-manager';
 import InCallManager from 'react-native-incall-manager';
 import { headsetService } from './headsetService';
-import { focusService } from './focusService'; // Import du nouveau service
+import { focusService } from './focusService';
 
 class AudioService {
   stream: MediaStream | null = null;
@@ -35,7 +34,7 @@ class AudioService {
       focusService.setCallbacks(
           () => { 
               console.log("[Audio] Focus LOST -> Stopping TX");
-              this.setTx(false); // Sécurité immédiate
+              this.setTx(false);
           },
           () => {
               console.log("[Audio] Focus GAINED -> Ready");
@@ -46,7 +45,6 @@ class AudioService {
       // Listener Commandes Physiques
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Headset Native Command:", source);
-          // Si on reçoit une commande, c'est qu'on a le contrôle
           if (this.isSessionActive) this.enforceAudioRoute();
           this.toggleVox();
       });
@@ -81,9 +79,7 @@ class AudioService {
     }
   }
 
-  // --- GESTION ROUTAGE AUDIO (Améliorée) ---
   private enforceAudioRoute() {
-      // Cette fonction doit être appelée souvent pour contrer les changements de l'OS
       if (headsetService.isHeadsetConnected) {
           console.log("[Audio] Enforcing Bluetooth SCO (High Priority)");
           InCallManager.setForceSpeakerphoneOn(false);
@@ -94,7 +90,6 @@ class AudioService {
       }
   }
 
-  // --- MUSIC CONTROL ---
   private setupMusicControl() {
       MusicControl.enableBackgroundMode(true);
       MusicControl.enableControl('play', true);
@@ -124,26 +119,19 @@ class AudioService {
       try {
         console.log("[Audio] Starting Audio Session...");
         
-        // 1. DEMANDE DE FOCUS EXPLICITE (CRITIQUE)
-        // On demande le focus AVANT de lancer l'audio VoIP
+        // CRITIQUE: Demande explicite de focus
         const focusGranted = await focusService.requestFocus();
-        if (!focusGranted) {
-            console.warn("[Audio] Focus request denied by OS");
-            // On continue quand même, mais avec risque
-        }
+        if (!focusGranted) console.warn("[Audio] Focus request denied by OS");
 
         this.isSessionActive = true;
         this.updateNotification(roomName);
 
-        // 2. Démarrage du moteur VoIP
-        // Le mode 'audio' peut parfois basculer le mode Android en MODE_IN_COMMUNICATION
-        // Ce qui est nécessaire pour le Bluetooth SCO (Micro)
+        // Démarrage du moteur VoIP
         InCallManager.start({ media: 'audio' });
         InCallManager.setKeepScreenOn(true);
         
-        // 3. Routage agressif
         setTimeout(() => { this.enforceAudioRoute(); }, 500);
-        setTimeout(() => { this.enforceAudioRoute(); }, 1500); // 2eme passe de sécurité
+        setTimeout(() => { this.enforceAudioRoute(); }, 1500);
 
       } catch (e) {
           console.error("[Audio] CRITICAL: Failed to start session", e);
@@ -164,14 +152,13 @@ class AudioService {
       try {
         MusicControl.stopControl();
         InCallManager.stop();
-        focusService.abandonFocus(); // On rend la main proprement
+        focusService.abandonFocus();
       } catch(e) {}
       this.isSessionActive = false;
       this.setTx(false);
   }
 
   private handleRouteUpdate(isConnected: boolean, type: string) {
-      // Si un nouveau périphérique arrive, on force le routage immédiatement
       setTimeout(() => this.enforceAudioRoute(), 500);
   }
 
