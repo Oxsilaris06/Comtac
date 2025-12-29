@@ -4,84 +4,86 @@ const path = require('path');
 
 module.exports = function(config) {
   return withRepoFix(
-    withCallKeepManifestFix(
-      withAccessibilityService(
-        withKeyEventBuildGradleFix(
-          withMainActivityInjection(
-            {
-              name: "COM TAC v14",
-              slug: "comtac-v14",
-              version: "1.0.5",
-              orientation: "portrait",
-              icon: "./assets/icon.png",
-              userInterfaceStyle: "light",
-              splash: {
-                image: "./assets/splash.png",
-                resizeMode: "contain",
-                backgroundColor: "#000000"
-              },
-              assetBundlePatterns: ["**/*"],
-              ios: {
-                supportsTablet: true,
-                infoPlist: {
-                  UIBackgroundModes: ["audio", "voip", "fetch"]
-                }
-              },
-              android: {
-                adaptiveIcon: {
-                  foregroundImage: "./assets/adaptive-icon.png",
+    withMediaSessionGradle( // Requis pour la notification riche "MusicControl"
+      withCallKeepManifestFix(
+        withAccessibilityService(
+          withKeyEventBuildGradleFix(
+            withMainActivityInjection(
+              {
+                name: "COM TAC v14",
+                slug: "comtac-v14",
+                version: "1.0.6",
+                orientation: "portrait",
+                icon: "./assets/icon.png",
+                userInterfaceStyle: "light",
+                splash: {
+                  image: "./assets/splash.png",
+                  resizeMode: "contain",
                   backgroundColor: "#000000"
                 },
-                package: "com.tactical.comtac",
-                permissions: [
-                  "android.permission.INTERNET",
-                  "android.permission.ACCESS_NETWORK_STATE",
-                  "android.permission.CAMERA",
-                  "android.permission.RECORD_AUDIO",
-                  "android.permission.ACCESS_FINE_LOCATION",
-                  "android.permission.ACCESS_COARSE_LOCATION",
-                  "android.permission.FOREGROUND_SERVICE",
-                  "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-                  "android.permission.FOREGROUND_SERVICE_MICROPHONE",
-                  "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
-                  "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE", 
-                  "android.permission.WAKE_LOCK",
-                  "android.permission.BATTERY_STATS",
-                  "android.permission.SYSTEM_ALERT_WINDOW",
-                  "android.permission.REORDER_TASKS",
-                  "android.permission.BLUETOOTH",
-                  "android.permission.BLUETOOTH_CONNECT",
-                  "android.permission.BLUETOOTH_SCAN",
-                  "android.permission.MODIFY_AUDIO_SETTINGS",
-                  "android.permission.ACTIVITY_RECOGNITION",
-                  "android.permission.BIND_ACCESSIBILITY_SERVICE",
-                  "android.permission.MANAGE_OWN_CALLS",
-                  "android.permission.READ_PHONE_STATE",
-                  "android.permission.CALL_PHONE",
-                  "android.permission.POST_NOTIFICATIONS" 
-                ]
-              },
-              plugins: [
-                ["expo-camera", { cameraPermission: "Allow camera", microphonePermission: "Allow mic" }],
-                ["expo-location", { locationAlwaysAndWhenInUsePermission: "Allow location" }],
-                [
-                  "expo-build-properties", 
-                  { 
-                    android: { 
-                      minSdkVersion: 24, 
-                      compileSdkVersion: 34, 
-                      buildToolsVersion: "34.0.0",
-                      targetSdkVersion: 33,
-                      kotlinVersion: "1.9.23"
-                    },
-                    ios: {
-                      deploymentTarget: "13.4"
-                    }
+                assetBundlePatterns: ["**/*"],
+                ios: {
+                  supportsTablet: true,
+                  infoPlist: {
+                    UIBackgroundModes: ["audio", "voip", "fetch"]
                   }
-                ],
-                "@config-plugins/react-native-webrtc"
-              ]
-            }
+                },
+                android: {
+                  adaptiveIcon: {
+                    foregroundImage: "./assets/adaptive-icon.png",
+                    backgroundColor: "#000000"
+                  },
+                  package: "com.tactical.comtac",
+                  permissions: [
+                    "android.permission.INTERNET",
+                    "android.permission.ACCESS_NETWORK_STATE",
+                    "android.permission.CAMERA",
+                    "android.permission.RECORD_AUDIO",
+                    "android.permission.ACCESS_FINE_LOCATION",
+                    "android.permission.ACCESS_COARSE_LOCATION",
+                    "android.permission.FOREGROUND_SERVICE",
+                    "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK", // Requis pour MusicControl
+                    "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+                    "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+                    "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE", 
+                    "android.permission.WAKE_LOCK",
+                    "android.permission.BATTERY_STATS",
+                    "android.permission.SYSTEM_ALERT_WINDOW",
+                    "android.permission.REORDER_TASKS",
+                    "android.permission.BLUETOOTH",
+                    "android.permission.BLUETOOTH_CONNECT",
+                    "android.permission.BLUETOOTH_SCAN",
+                    "android.permission.MODIFY_AUDIO_SETTINGS",
+                    "android.permission.ACTIVITY_RECOGNITION",
+                    "android.permission.BIND_ACCESSIBILITY_SERVICE",
+                    "android.permission.MANAGE_OWN_CALLS",
+                    "android.permission.READ_PHONE_STATE",
+                    "android.permission.CALL_PHONE",
+                    "android.permission.POST_NOTIFICATIONS" 
+                  ]
+                },
+                plugins: [
+                  ["expo-camera", { cameraPermission: "Allow camera", microphonePermission: "Allow mic" }],
+                  ["expo-location", { locationAlwaysAndWhenInUsePermission: "Allow location" }],
+                  [
+                    "expo-build-properties", 
+                    { 
+                      android: { 
+                        minSdkVersion: 24, 
+                        compileSdkVersion: 34, 
+                        buildToolsVersion: "34.0.0",
+                        targetSdkVersion: 33,
+                        kotlinVersion: "1.9.23"
+                      },
+                      ios: {
+                        deploymentTarget: "13.4"
+                      }
+                    }
+                  ],
+                  "@config-plugins/react-native-webrtc"
+                ]
+              }
+            )
           )
         )
       )
@@ -89,7 +91,20 @@ module.exports = function(config) {
   );
 };
 
-// --- FIX REPO (Jitpack/Google) ---
+// --- FIX DEPENDANCE MEDIA (CRITIQUE POUR UI RICHE) ---
+function withMediaSessionGradle(config) {
+  return withAppBuildGradle(config, config => {
+      if (!config.modResults.contents.includes("androidx.media:media")) {
+          config.modResults.contents = config.modResults.contents.replace(
+              /dependencies\s*{/,
+              `dependencies {
+    implementation 'androidx.media:media:1.6.0'`
+          );
+      }
+      return config;
+  });
+}
+
 function withRepoFix(config) {
   return withProjectBuildGradle(config, (config) => {
     const { modResults } = config;
@@ -110,7 +125,6 @@ function withRepoFix(config) {
   });
 }
 
-// --- FIX CALLKEEP MANIFEST ---
 function withCallKeepManifestFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
@@ -136,8 +150,6 @@ function withCallKeepManifestFix(config) {
   });
 }
 
-// --- NETTOYAGE INJECTION MAINACTIVITY ---
-// On s'assure que l'ancien HeadsetPackage est supprimé du MainApplication
 function withMainActivityInjection(config) {
     return withDangerousMod(config, [
         'android',
@@ -147,12 +159,7 @@ function withMainActivityInjection(config) {
             
             if (fs.existsSync(appPath)) {
                 let content = fs.readFileSync(appPath, 'utf8');
-                // On retire les références à HeadsetPackage s'il y en a
                 content = content.replace(/.*HeadsetPackage.*\n?/g, '');
-                // On s'assure que la liste des packages est propre
-                if (!content.includes('PackageList(this).packages')) {
-                     // Si on a tout cassé, on remet le défaut (rare mais prudent)
-                }
                 fs.writeFileSync(appPath, content);
             }
             return config;
@@ -160,7 +167,6 @@ function withMainActivityInjection(config) {
     ]);
 }
 
-// --- SERVICE ACCESSIBILITÉ (BACKUP BOUTONS PHYSIQUES) ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
