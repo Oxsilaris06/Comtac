@@ -28,27 +28,26 @@ class AudioService {
     try {
       console.log("[Audio] Initializing...");
 
-      // 1. Configuration de la Session Musicale (Notification & Contrôles)
-      this.setupMusicControl();
+      // 1. D'abord init le HeadsetService (et sa session native potentiellement conflictuelle)
+      // On le fait AVANT MusicControl. Ainsi, quand MusicControl s'initialisera ensuite,
+      // il prendra le dessus (Focus) pour les commandes boutons, ce qui est ce qu'on veut.
+      headsetService.init();
 
-      // 2. Headset Listener (Commandes BT via Module Natif & Accessibility)
-      // Cela reste notre couche basse pour intercepter les touches spécifiques (Vol+/-)
+      // Listener de secours (au cas où le natif attraperait quand même quelque chose)
       headsetService.setCommandCallback((source) => { 
-          console.log("[Audio] Headset Command Received:", source);
-          // Si on reçoit une commande physique, on s'assure que le son sort au bon endroit
-          if (this.isSessionActive) {
-             this.enforceAudioRoute();
-          }
-          this.toggleVox(); 
+          console.log("[Audio] Headset Native Command:", source);
+          if (this.isSessionActive) this.enforceAudioRoute();
+          // On ne toggle ici que si MusicControl a raté le coche, pour éviter les doublons
+          // Mais généralement MusicControl prendra le relais via ses propres listeners ci-dessous
       });
       
       headsetService.setConnectionCallback((isConnected, type) => { 
           console.log(`[Audio] Headset Changed: ${isConnected} (${type})`);
           this.handleRouteUpdate(isConnected, type); 
       });
-      
-      // Init du module natif
-      headsetService.init();
+
+      // 2. Configuration de MusicControl (La session "Gagnante")
+      this.setupMusicControl();
 
       // 3. Préparation du Micro (Sans l'activer pour le moment)
       try {
@@ -62,7 +61,6 @@ class AudioService {
 
       this.setupVox();
       
-      // Force le volume au max pour être sûr d'entendre
       try { await VolumeManager.setVolume(1.0); } catch (e) {}
 
       this.isInitialized = true;
@@ -75,10 +73,6 @@ class AudioService {
 
   // --- GESTION ROUTAGE AUDIO (CRITIQUE POUR BLUETOOTH) ---
   private enforceAudioRoute() {
-      // InCallManager gère le basculement entre le profil A2DP (Musique, pas de micro)
-      // et le profil SCO (Appel, micro basse qualité mais temps réel).
-      // Pour une app "Talkie Walkie", on VEUT du SCO quand un casque est là.
-      
       if (headsetService.isHeadsetConnected) {
           console.log("[Audio] Enforcing Bluetooth SCO");
           InCallManager.setForceSpeakerphoneOn(false);
@@ -89,25 +83,35 @@ class AudioService {
       }
   }
 
-  // --- REMPLACEMENT DE CALLKEEP PAR MUSIC CONTROL ---
+  // --- MUSIC CONTROL (Notification & Boutons) ---
   private setupMusicControl() {
-      // Configure les contrôles disponibles sur l'écran verrouillé / notification
       MusicControl.enableBackgroundMode(true);
       
-      // On active tout ce qui peut ressembler à un bouton sur un casque
+      // Mappage complet des boutons possibles sur un casque
       MusicControl.enableControl('play', true);
       MusicControl.enableControl('pause', true);
       MusicControl.enableControl('stop', true);
-      MusicControl.enableControl('nextTrack', true);     // Souvent mappé sur double clic
-      MusicControl.enableControl('previousTrack', true); // Souvent mappé sur triple clic
+      MusicControl.enableControl('nextTrack', true);     
+      MusicControl.enableControl('previousTrack', true); 
+      // togglePlayPause est crucial pour beaucoup de casques mono-bouton
+      MusicControl.enableControl('togglePlayPause', true); 
+
+      // Une seule action : Basculer le mode VOX
+      const triggerSwitch = () => {
+          console.log("[Audio] MusicControl Command Received");
+          this.toggleVox();
+      };
+
+      MusicControl.on(Command.play, triggerSwitch);
+      MusicControl.on(Command.pause, triggerSwitch);
+      MusicControl.on(Command.togglePlayPause, triggerSwitch);
+      MusicControl.on(Command.nextTrack, triggerSwitch);
+      MusicControl.on(Command.previousTrack, triggerSwitch);
       
-      // Gestion des événements
-      MusicControl.on(Command.play, () => { this.toggleVox(); });
-      MusicControl.on(Command.pause, () => { this.toggleVox(); });
-      MusicControl.on(Command.togglePlayPause, () => { this.toggleVox(); });
-      MusicControl.on(Command.nextTrack, () => { this.toggleVox(); });
-      MusicControl.on(Command.previousTrack, () => { this.toggleVox(); });
       MusicControl.on(Command.stop, () => { this.stopSession(); });
+      
+      // Gestion du "Canardage" (Audio Focus Loss - ex: appel téléphonique entrant, GPS)
+      MusicControl.on(Command.closeNotification, () => { this.stopSession(); });
   }
 
   public async startSession(roomName: string = "Tactical Net") {
@@ -117,47 +121,26 @@ class AudioService {
         console.log("[Audio] Starting Audio Session (Music Mode)");
         this.isSessionActive = true;
 
-        // 1. Afficher la notification "Music" (Garde l'app en vie)
-        MusicControl.setNowPlaying({
-            title: roomName,
-            artwork: require('../assets/icon.png'), // Assurez-vous que l'image existe ou retirez la ligne
-            artist: 'ComTac Ops',
-            album: 'Radio Secure',
-            genre: 'Tactical',
-            duration: 0, // Live stream
-            description: 'Canal Actif',
-            color: 0xFF3b82f6, // Bleu ComTac
-            isLiveStream: true,
-        });
-        
-        // On dit à Android qu'on "Joue" de la musique
-        MusicControl.updatePlayback({
-            state: MusicControl.STATE_PLAYING,
-            elapsedTime: 0 
-        });
+        // Init initial de la notif
+        this.updateNotification(roomName);
 
-        // 2. Activer le moteur Audio VoIP (InCallManager)
-        // C'est lui qui va activer le micro en mode "Communication" (Echo cancellation, etc.)
-        // Le mode 'audio' est standard pour la VoIP. 'video' peut parfois aider si 'audio' coupe.
+        // Activer le moteur Audio VoIP
         InCallManager.start({ media: 'audio' });
-        InCallManager.setKeepScreenOn(true); // Empêche le CPU de dormir
+        InCallManager.setKeepScreenOn(true);
         
-        // 3. Forcer le routage immédiat
+        // Forcer le routage
         setTimeout(() => {
             this.enforceAudioRoute();
-            this.updateNotification();
         }, 500);
 
       } catch (e) {
           console.error("[Audio] CRITICAL: Failed to start session", e);
-          // Tentative de fallback
           this.startInCallManagerFallback();
       }
   }
 
   private startInCallManagerFallback() {
       try {
-          console.log("[Audio] Fallback Start...");
           InCallManager.start({ media: 'audio' });
           InCallManager.setKeepScreenOn(true);
           this.enforceAudioRoute(); 
@@ -167,16 +150,15 @@ class AudioService {
   public stopSession() {
       if (!this.isSessionActive) return;
       try {
-        MusicControl.stopControl(); // Retire la notif
+        MusicControl.stopControl();
         InCallManager.stop();
       } catch(e) {}
       this.isSessionActive = false;
+      this.setTx(false);
   }
 
   private handleRouteUpdate(isConnected: boolean, type: string) {
-      // Re-apply routing logic
       this.enforceAudioRoute();
-      this.updateNotification();
   }
 
   public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
@@ -190,27 +172,41 @@ class AudioService {
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
     console.log("[Audio] Toggle VOX ->", this.mode);
     
-    // Si on repasse en PTT, on coupe l'émission immédiatement
     if (this.mode === 'ptt') {
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
     
+    // IMPORTANT : On met à jour la notif pour refléter l'état
+    // Cela permet au bouton du casque de savoir s'il doit envoyer "Pause" ou "Play" la prochaine fois
     this.updateNotification();
+    
     this.notifyListeners(); 
     return this.mode === 'vox'; 
   }
 
-  updateNotification() {
+  updateNotification(customTitle?: string) {
       if (!this.isSessionActive) return;
       
       const isVox = this.mode === 'vox';
-      const statusText = isVox ? `VOX ACTIF ${this.isTx ? '🔴' : '⚪'}` : 'PTT (Appuyez)';
+      // État visuel et LOGIQUE (Playing = VOX ON, Paused = PTT/VOX OFF)
+      const playbackState = isVox ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED;
       
-      // On met à jour le texte de la notification média
+      MusicControl.setNowPlaying({
+          title: customTitle || (isVox ? "VOX: ACTIVÉ (Écoute...)" : "PTT: Mode Manuel"),
+          artwork: require('../assets/icon.png'),
+          artist: 'ComTac Ops',
+          album: 'Canal Sécurisé',
+          genre: 'Tactical',
+          duration: 0,
+          description: isVox ? 'Parlez pour transmettre' : 'Appuyez pour parler',
+          color: isVox ? 0xFFef4444 : 0xFF3b82f6, // Rouge si VOX actif, Bleu sinon
+          isLiveStream: true,
+      });
+
       MusicControl.updatePlayback({
-          state: MusicControl.STATE_PLAYING,
-          title: "ComTac: " + statusText
+          state: playbackState,
+          elapsedTime: 0 
       });
   }
 
@@ -218,11 +214,9 @@ class AudioService {
       try {
         RNSoundLevel.start();
         RNSoundLevel.onNewFrame = (data: any) => {
-            // Logique VOX
             if (this.mode === 'vox' && data.value > this.voxThreshold) {
                 if (!this.isTx) this.setTx(true);
                 
-                // Debounce pour éviter de couper la parole trop vite
                 if (this.voxTimer) clearTimeout(this.voxTimer);
                 this.voxTimer = setTimeout(() => this.setTx(false), this.voxHoldTime);
             }
@@ -234,27 +228,26 @@ class AudioService {
     if (this.isTx === state) return;
     this.isTx = state;
     
-    // Active/Désactive physiquement les pistes audio du micro
     if (this.stream) {
         this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
     
-    // Feedback visuel
-    if(this.mode === 'vox' && this.isSessionActive) this.updateNotification();
+    // Petit feedback visuel dans la notif si on passe en émission
+    if (this.isSessionActive && this.mode === 'vox') {
+         MusicControl.updatePlayback({
+             state: MusicControl.STATE_PLAYING,
+             speed: state ? 1.1 : 1.0, // Hack pour forcer un refresh UI mineur
+             elapsedTime: 0
+         });
+    }
   }
   
   startMetering(callback: (level: number) => void) {
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
   }
   
-  muteIncoming(mute: boolean) {
-      // TODO: Implémenter mute des pistes distantes si nécessaire
-  }
-  
-  playStream(remoteStream: MediaStream) {
-      // InCallManager gère la sortie (Speaker/BT), WebRTC gère le décodage.
-      // Rien de spécial à faire ici sauf si on voulait mixer l'audio.
-  }
+  muteIncoming(mute: boolean) {}
+  playStream(remoteStream: MediaStream) {}
 }
 
 export const audioService = new AudioService();
