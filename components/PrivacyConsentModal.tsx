@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Modal, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform } from 'react-native';
+import { View, Text, Modal, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Camera } from 'expo-camera';
@@ -21,21 +21,17 @@ const PrivacyConsentModal: React.FC<Props> = ({ onConsentGiven }) => {
 
   const checkConsent = async () => {
     try {
-      // 1. Vérification du flag de consentement stocké
       const stored = await AsyncStorage.getItem(CONSENT_KEY);
       
-      // 2. Vérification des permissions réelles (Ceinture de sécurité)
-      // Si le flag est là mais que les perms sont sautées (réinstall), on réaffiche
+      // Double vérification : Si flag OK mais permissions manquantes, on réaffiche
       const camStatus = await Camera.getCameraPermissionsAsync();
       const micStatus = await Audio.getPermissionsAsync();
-      
       const isPermsOK = camStatus.granted && micStatus.granted;
 
       if (stored === 'GRANTED' && isPermsOK) {
         onConsentGiven();
         setVisible(false);
       } else {
-        // Pas de consentement OU permissions manquantes -> On affiche
         setVisible(true);
       }
     } catch (e) {
@@ -67,18 +63,12 @@ const PrivacyConsentModal: React.FC<Props> = ({ onConsentGiven }) => {
           <ScrollView style={styles.scroll}>
             <Text style={styles.text}>
               Bienvenue sur ComTac v14.{"\n\n"}
-              
               <Text style={styles.bold}>1. MICROPHONE & AUDIO :</Text>{"\n"}
-              Cette application nécessite un accès exclusif au microphone pour fonctionner comme une radio tactique (PTT).{"\n\n"}
-              
+              Accès requis pour le PTT et la communication tactique.{"\n\n"}
               <Text style={styles.bold}>2. POSITION (GPS) :</Text>{"\n"}
-              Votre position est partagée UNIQUEMENT avec les membres de votre salon (P2P). Aucune donnée n'est stockée sur nos serveurs.{"\n\n"}
-              
+              Partagée uniquement en P2P avec votre escouade.{"\n\n"}
               <Text style={styles.bold}>3. BLUETOOTH :</Text>{"\n"}
-              Requis pour la détection des casques tactiques et boutons PTT.{"\n\n"}
-              
-              <Text style={styles.bold}>4. DONNÉES :</Text>{"\n"}
-              L'application fonctionne en Peer-to-Peer. Vos communications sont chiffrées (DTLS-SRTP) et transitent directement entre les appareils.
+              Requis pour les casques et boutons PTT.
             </Text>
           </ScrollView>
 
