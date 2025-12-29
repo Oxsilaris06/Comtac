@@ -1,4 +1,4 @@
-const { withAndroidManifest, withDangerousMod, withAppBuildGradle, withProjectBuildGradle } = require('@expo/config-plugins');
+const { withAndroidManifest, withDangerousMod, withAppBuildGradle, withProjectBuildGradle, withStringsXml } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
@@ -8,12 +8,12 @@ module.exports = function(config) {
       withMediaSessionGradle(
         withCallKeepManifestFix(
           withAccessibilityService(
-            withKeyEventBuildGradleFix(
+            withKeyEventBuildGradleFix( // <--- C'est ici que la réparation se fait
               withMainActivityInjection(
                 {
                   name: "COM TAC v14",
                   slug: "comtac-v14",
-                  version: "1.0.4", // Version bump
+                  version: "1.0.5",
                   orientation: "portrait",
                   icon: "./assets/icon.png",
                   userInterfaceStyle: "light",
@@ -82,6 +82,43 @@ module.exports = function(config) {
   );
 };
 
+// --- LE FIX CRITIQUE POUR REACT-NATIVE-KEYEVENT ---
+function withKeyEventBuildGradleFix(config) {
+  return withDangerousMod(config, [
+    'android',
+    async (config) => {
+      // On va chercher le fichier build.gradle DANS node_modules
+      const file = path.join(config.modRequest.projectRoot, 'node_modules', 'react-native-keyevent', 'android', 'build.gradle');
+      
+      if (fs.existsSync(file)) {
+        let contents = fs.readFileSync(file, 'utf8');
+        
+        // On force la mise à jour des versions SDK pour correspondre au projet
+        // Cela résout l'erreur "In order to compile Java 9+ source..."
+        contents = contents.replace(/compileSdkVersion\s+.*$/gm, 'compileSdkVersion 34');
+        contents = contents.replace(/buildToolsVersion\s+.*$/gm, 'buildToolsVersion "34.0.0"');
+        contents = contents.replace(/targetSdkVersion\s+.*$/gm, 'targetSdkVersion 33');
+        contents = contents.replace(/minSdkVersion\s+.*$/gm, 'minSdkVersion 24');
+        
+        // Patch pour la compatibilité Java
+        if (!contents.includes('compileOptions')) {
+            contents = contents.replace(/android\s*{/, `android {
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }`);
+        }
+        
+        fs.writeFileSync(file, contents);
+        console.log("✅ Patched react-native-keyevent build.gradle");
+      } else {
+          console.warn("⚠️ react-native-keyevent build.gradle not found at " + file);
+      }
+      return config;
+    },
+  ]);
+}
+
 // --- LOGIQUE KOTLIN (L'intercepteur de bouton) ---
 function withTacticalKotlinModule(config) {
   return withDangerousMod(config, [
@@ -122,7 +159,6 @@ class TacticalConnection(private val module: TacticalModule) : Connection() {
 
     override fun onShowIncomingCallUi() { setActive() }
 
-    // LE CŒUR DU SYSTÈME : Interception du clic
     override fun onDisconnect() {
         Log.d("TacticalConnection", "Headset Button Pressed")
         module.emitEvent("HEADSET_COMMAND", "BUTTON_MAIN")
@@ -347,7 +383,77 @@ function withAccessibilityService(config) {
         return config;
     }
   ]);
+  
+  // Ajout des strings pour l'accessibilité
+  config = withStringsXml(config, config => {
+      if(!config.modResults.resources.string) config.modResults.resources.string = [];
+      if (!config.modResults.resources.string.find(s => s.$.name === "accessibility_service_description")) {
+          config.modResults.resources.string.push({ $: { name: "accessibility_service_description" }, _: "ComTac Hardware Control" });
+      }
+      return config;
+  });
+  
+  // Fichier Java du service accessibilité
+  config = withDangerousMod(config, [
+    'android',
+    async (config) => {
+        const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
+        if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
+        const javaContent = `package com.tactical.comtac;
+import android.accessibilityservice.AccessibilityService;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.KeyEvent;
+import android.content.Intent;
+public class ComTacAccessibilityService extends AccessibilityService {
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent event) {}
+    @Override
+    public void onInterrupt() {}
+    @Override
+    protected boolean onKeyEvent(KeyEvent event) {
+        int action = event.getAction();
+        int keyCode = event.getKeyCode();
+        if (action == KeyEvent.ACTION_DOWN) {
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || 
+                keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
+                keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                Intent intent = new Intent("COMTAC_HARDWARE_EVENT");
+                intent.putExtra("keyCode", keyCode);
+                sendBroadcast(intent);
+                return true; 
+            }
+        }
+        return super.onKeyEvent(event);
+    }
+}`;
+        fs.writeFileSync(path.join(packagePath, 'ComTacAccessibilityService.java'), javaContent);
+        return config;
+    }
+  ]);
+
+  // Ajout dans le manifest
+  config = withAndroidManifest(config, async (config) => {
+      const app = config.modResults.manifest.application[0];
+      if (app.service) app.service = app.service.filter(s => s.$['android:name'] !== '.ComTacAccessibilityService');
+      else app.service = [];
+      app.service.push({
+          $: {
+              'android:name': '.ComTacAccessibilityService',
+              'android:permission': 'android.permission.BIND_ACCESSIBILITY_SERVICE',
+              'android:exported': 'true'
+          },
+          'intent-filter': [{
+              'action': [{ $: { 'android:name': 'android.accessibilityservice.AccessibilityService' } }]
+          }],
+          'meta-data': [{
+              $: {
+                  'android:name': 'android.accessibilityservice',
+                  'android:resource': '@xml/accessibility_service_config'
+              }
+          }]
+      });
+      return config;
+  });
+
   return config;
 }
-
-function withKeyEventBuildGradleFix(config) { return config; }
