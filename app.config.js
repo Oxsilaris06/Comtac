@@ -13,7 +13,7 @@ module.exports = function(config) {
                 {
                   name: "COM TAC v14",
                   slug: "comtac-v14",
-                  version: "1.0.0",
+                  version: "1.0.1",
                   orientation: "portrait",
                   icon: "./assets/icon.png",
                   userInterfaceStyle: "light",
@@ -46,6 +46,7 @@ module.exports = function(config) {
                       "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
                       "android.permission.FOREGROUND_SERVICE_MICROPHONE",
                       "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+                      "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE", 
                       "android.permission.WAKE_LOCK",
                       "android.permission.BATTERY_STATS",
                       "android.permission.SYSTEM_ALERT_WINDOW",
@@ -73,7 +74,7 @@ module.exports = function(config) {
                           compileSdkVersion: 34, 
                           buildToolsVersion: "34.0.0",
                           targetSdkVersion: 33,
-                          kotlinVersion: "1.9.23" // Force une version Kotlin stable pour RN 0.74
+                          kotlinVersion: "1.9.23"
                         },
                         ios: {
                           deploymentTarget: "13.4"
@@ -92,13 +93,11 @@ module.exports = function(config) {
   );
 };
 
-// --- FIX CRITIQUE: Dépôts Maven/Google/Jitpack ---
+// --- FIX REPO ---
 function withRepoFix(config) {
   return withProjectBuildGradle(config, (config) => {
     const { modResults } = config;
     if (modResults.language === 'groovy') {
-      // On injecte Jitpack et on s'assure que google/mavenCentral sont là dans allprojects
-      // Cela corrige souvent les erreurs 403 ou les dépendances introuvables
       if (!modResults.contents.includes("jitpack.io")) {
         modResults.contents = modResults.contents.replace(
           /allprojects\s*{\s*repositories\s*{/,
@@ -115,7 +114,7 @@ function withRepoFix(config) {
   });
 }
 
-// --- 1. AJOUT DÉPENDANCE ANDROIDX MEDIA ---
+// --- DEPENDANCES ---
 function withMediaSessionGradle(config) {
   return withAppBuildGradle(config, config => {
       if (!config.modResults.contents.includes("androidx.media:media")) {
@@ -129,7 +128,7 @@ function withMediaSessionGradle(config) {
   });
 }
 
-// --- 2. CRÉATION DU MODULE NATIF "HeadsetModule" ---
+// --- MODULE HEADSET (BLINDÉ ANTI-CRASH) ---
 function withHeadsetModule(config) {
   return withDangerousMod(config, [
     'android',
@@ -137,7 +136,6 @@ function withHeadsetModule(config) {
       const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
       if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
 
-      // A. HeadsetModule.java (Logique MediaSession)
       const moduleContent = `package com.tactical.comtac;
 
 import android.content.Intent;
@@ -148,6 +146,7 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
+import android.util.Log;
 
 public class HeadsetModule extends ReactContextBaseJavaModule {
     private static MediaSessionCompat mediaSession;
@@ -165,9 +164,14 @@ public class HeadsetModule extends ReactContextBaseJavaModule {
 
     @ReactMethod
     public void startSession() {
-        if (mediaSession != null) return;
-
         try {
+            if (mediaSession != null) {
+                // Déjà actif, on sécurise
+                if (!mediaSession.isActive()) mediaSession.setActive(true);
+                return;
+            }
+
+            Log.d("HeadsetModule", "Starting Media Session...");
             mediaSession = new MediaSessionCompat(reactContext, "ComTacSession");
             
             mediaSession.setFlags(
@@ -192,37 +196,46 @@ public class HeadsetModule extends ReactContextBaseJavaModule {
             mediaSession.setCallback(new MediaSessionCompat.Callback() {
                 @Override
                 public boolean onMediaButtonEvent(Intent mediaButtonEvent) {
-                    KeyEvent keyEvent = mediaButtonEvent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
-                    if (keyEvent != null && keyEvent.getAction() == KeyEvent.ACTION_DOWN) {
-                        if (reactContext.hasActiveCatalystInstance()) {
-                            reactContext
-                                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-                                .emit("COMTAC_MEDIA_EVENT", keyEvent.getKeyCode());
+                    try {
+                        KeyEvent keyEvent = mediaButtonEvent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+                        if (keyEvent != null && keyEvent.getAction() == KeyEvent.ACTION_DOWN) {
+                            if (reactContext.hasActiveCatalystInstance()) {
+                                reactContext
+                                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                                    .emit("COMTAC_MEDIA_EVENT", keyEvent.getKeyCode());
+                            }
+                            return true; // On consomme l'event
                         }
-                        return true;
+                    } catch (Exception e) {
+                        Log.e("HeadsetModule", "Error in media button callback", e);
                     }
                     return super.onMediaButtonEvent(mediaButtonEvent);
                 }
             });
 
             mediaSession.setActive(true);
+            Log.d("HeadsetModule", "Media Session Started");
+
         } catch (Exception e) {
-            e.printStackTrace();
+            Log.e("HeadsetModule", "CRITICAL ERROR starting session", e);
         }
     }
 
     @ReactMethod
     public void stopSession() {
-        if (mediaSession != null) {
-            mediaSession.setActive(false);
-            mediaSession.release();
-            mediaSession = null;
+        try {
+            if (mediaSession != null) {
+                mediaSession.setActive(false);
+                mediaSession.release();
+                mediaSession = null;
+            }
+        } catch (Exception e) {
+             Log.e("HeadsetModule", "Error stopping session", e);
         }
     }
 }`;
       fs.writeFileSync(path.join(packagePath, 'HeadsetModule.java'), moduleContent);
 
-      // B. HeadsetPackage.java (Lien avec React Native)
       const packageContent = `package com.tactical.comtac;
 
 import com.facebook.react.ReactPackage;
@@ -253,7 +266,7 @@ public class HeadsetPackage implements ReactPackage {
   ]);
 }
 
-// --- FIX CALLKEEP ---
+// --- FIX CALLKEEP MANIFEST (ANDROID 14 COMPLIANT) ---
 function withCallKeepManifestFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
@@ -264,9 +277,11 @@ function withCallKeepManifestFix(config) {
         if (!mainApplication['service']) mainApplication['service'] = [];
         mainApplication['service'].push(connectionService);
     }
+    
+    // CRITIQUE ANDROID 14 : Ajout de connectedDevice pour le Bluetooth et camera/mic
     connectionService.$['android:permission'] = 'android.permission.BIND_TELECOM_CONNECTION_SERVICE';
     connectionService.$['android:exported'] = 'true';
-    connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
+    connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall|connectedDevice';
     
     const bgServiceName = 'io.wazo.callkeep.RNCallKeepBackgroundMessagingService';
     let bgService = mainApplication['service']?.find(s => s.$['android:name'] === bgServiceName);
@@ -274,12 +289,13 @@ function withCallKeepManifestFix(config) {
         bgService = { $: { 'android:name': bgServiceName } };
         mainApplication['service'].push(bgService);
     }
-    bgService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall';
+    // Idem pour le service de background
+    bgService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall|connectedDevice';
     return config;
   });
 }
 
-// --- ENREGISTREMENT MANUEL DU PACKAGE ---
+// --- INJECTION PACKAGE ---
 function withMainActivityInjection(config) {
     return withDangerousMod(config, [
         'android',
@@ -303,7 +319,7 @@ function withMainActivityInjection(config) {
     ]);
 }
 
-// --- ACCESSIBILITY BACKUP ---
+// --- ACCESSIBILITY ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
