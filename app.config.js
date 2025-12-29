@@ -4,7 +4,7 @@ const path = require('path');
 
 module.exports = function(config) {
   return withRepoFix(
-    withHeadsetModule( // Ce module contient maintenant la logique AudioFocus
+    withHeadsetModule(
       withMediaSessionGradle(
         withCallKeepManifestFix(
           withAccessibilityService(
@@ -13,7 +13,7 @@ module.exports = function(config) {
                 {
                   name: "COM TAC v14",
                   slug: "comtac-v14",
-                  version: "1.0.1",
+                  version: "1.0.3",
                   orientation: "portrait",
                   icon: "./assets/icon.png",
                   userInterfaceStyle: "light",
@@ -93,7 +93,7 @@ module.exports = function(config) {
   );
 };
 
-// --- FIX REPO ---
+// --- FIX BUILD & REPO ---
 function withRepoFix(config) {
   return withProjectBuildGradle(config, (config) => {
     const { modResults } = config;
@@ -114,7 +114,6 @@ function withRepoFix(config) {
   });
 }
 
-// --- DEPENDANCES ---
 function withMediaSessionGradle(config) {
   return withAppBuildGradle(config, config => {
       if (!config.modResults.contents.includes("androidx.media:media")) {
@@ -128,7 +127,7 @@ function withMediaSessionGradle(config) {
   });
 }
 
-// --- MODULE HEADSET + AUDIO FOCUS (VERSION MISE À JOUR) ---
+// --- MODULE NATIF: AUDIO FOCUS & MEDIA BUTTONS ---
 function withHeadsetModule(config) {
   return withDangerousMod(config, [
     'android',
@@ -136,35 +135,57 @@ function withHeadsetModule(config) {
       const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
       if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
 
-      // Code Java Natif mis à jour pour inclure AudioManager
+      // HeadsetModule.java
       const moduleContent = `package com.tactical.comtac;
 
-import android.content.Context;
 import android.content.Intent;
-import android.media.AudioManager;
-import android.media.AudioAttributes;
-import android.media.AudioFocusRequest;
-import android.os.Build;
+import android.content.Context;
 import android.view.KeyEvent;
+import android.media.AudioManager;
+import android.media.AudioFocusRequest;
+import android.media.AudioAttributes;
+import android.os.Build;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
-import com.facebook.react.bridge.Promise;
+
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
+import com.facebook.react.bridge.Promise;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 import android.util.Log;
 
-public class HeadsetModule extends ReactContextBaseJavaModule implements AudioManager.OnAudioFocusChangeListener {
+public class HeadsetModule extends ReactContextBaseJavaModule {
     private static MediaSessionCompat mediaSession;
     private final ReactApplicationContext reactContext;
     private AudioManager audioManager;
-    private AudioFocusRequest focusRequest; // Pour Android 8.0+
+    private AudioManager.OnAudioFocusChangeListener focusChangeListener;
+    private AudioFocusRequest focusRequest;
 
     public HeadsetModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
         this.audioManager = (AudioManager) reactContext.getSystemService(Context.AUDIO_SERVICE);
+        
+        // Listener pour les pertes de focus (ex: Appel GSM entrant)
+        this.focusChangeListener = new AudioManager.OnAudioFocusChangeListener() {
+            @Override
+            public void onAudioFocusChange(int focusChange) {
+                String event = "UNKNOWN";
+                switch (focusChange) {
+                    case AudioManager.AUDIOFOCUS_GAIN: event = "GAIN"; break;
+                    case AudioManager.AUDIOFOCUS_LOSS: event = "LOSS"; break;
+                    case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT: event = "LOSS_TRANSIENT"; break;
+                    case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK: event = "LOSS_TRANSIENT_CAN_DUCK"; break;
+                }
+                Log.d("HeadsetModule", "Audio Focus Changed: " + event);
+                if (reactContext.hasActiveCatalystInstance()) {
+                    reactContext
+                        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                        .emit("COMTAC_FOCUS_EVENT", event);
+                }
+            }
+        };
     }
 
     @Override
@@ -172,91 +193,45 @@ public class HeadsetModule extends ReactContextBaseJavaModule implements AudioMa
         return "HeadsetModule";
     }
 
-    // --- GESTION DU FOCUS AUDIO ---
-
     @ReactMethod
     public void requestAudioFocus(Promise promise) {
         try {
             int result;
-            
-            // Configuration pour la VOIX (VoIP)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 AudioAttributes playbackAttributes = new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build();
-
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build();
+                    
                 focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-                        .setAudioAttributes(playbackAttributes)
-                        .setAcceptsDelayedFocusGain(true)
-                        .setOnAudioFocusChangeListener(this)
-                        .build();
-
+                    .setAudioAttributes(playbackAttributes)
+                    .setAcceptsDelayedFocusGain(true)
+                    .setOnAudioFocusChangeListener(focusChangeListener)
+                    .build();
+                    
                 result = audioManager.requestAudioFocus(focusRequest);
             } else {
-                // Ancienne méthode (Android < 8)
-                result = audioManager.requestAudioFocus(this,
+                result = audioManager.requestAudioFocus(focusChangeListener,
                         AudioManager.STREAM_VOICE_CALL,
                         AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
             }
-
-            if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                Log.d("HeadsetModule", "Audio Focus GRANTED");
-                promise.resolve(true);
-            } else {
-                Log.d("HeadsetModule", "Audio Focus DENIED");
-                promise.resolve(false);
-            }
+            
+            boolean granted = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+            Log.d("HeadsetModule", "Request Focus Result: " + granted);
+            promise.resolve(granted);
         } catch (Exception e) {
-            Log.e("HeadsetModule", "Error requesting focus", e);
             promise.reject("FOCUS_ERROR", e);
         }
     }
 
     @ReactMethod
     public void abandonAudioFocus() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (focusRequest != null) {
-                    audioManager.abandonAudioFocusRequest(focusRequest);
-                }
-            } else {
-                audioManager.abandonAudioFocus(this);
-            }
-            Log.d("HeadsetModule", "Audio Focus ABANDONED");
-        } catch (Exception e) {
-            Log.e("HeadsetModule", "Error abandoning focus", e);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && focusRequest != null) {
+            audioManager.abandonAudioFocusRequest(focusRequest);
+        } else {
+            audioManager.abandonAudioFocus(focusChangeListener);
         }
     }
-
-    @Override
-    public void onAudioFocusChange(int focusChange) {
-        String eventName = "";
-        switch (focusChange) {
-            case AudioManager.AUDIOFOCUS_GAIN:
-                eventName = "GAIN";
-                break;
-            case AudioManager.AUDIOFOCUS_LOSS:
-                eventName = "LOSS";
-                break;
-            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
-                eventName = "LOSS_TRANSIENT";
-                break;
-            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
-                eventName = "LOSS_TRANSIENT_CAN_DUCK";
-                break;
-        }
-
-        Log.d("HeadsetModule", "Focus Change: " + eventName);
-        
-        if (reactContext.hasActiveCatalystInstance()) {
-            reactContext
-                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-                .emit("COMTAC_FOCUS_EVENT", eventName);
-        }
-    }
-
-    // --- GESTION MEDIA SESSION (EXISTANTE) ---
 
     @ReactMethod
     public void startSession() {
@@ -331,6 +306,7 @@ public class HeadsetModule extends ReactContextBaseJavaModule implements AudioMa
 }`;
       fs.writeFileSync(path.join(packagePath, 'HeadsetModule.java'), moduleContent);
 
+      // HeadsetPackage.java
       const packageContent = `package com.tactical.comtac;
 
 import com.facebook.react.ReactPackage;
@@ -361,7 +337,7 @@ public class HeadsetPackage implements ReactPackage {
   ]);
 }
 
-// --- FIX CALLKEEP MANIFEST (ANDROID 14 COMPLIANT) ---
+// --- FIX MANIFEST ANDROID 14 ---
 function withCallKeepManifestFix(config) {
   return withAndroidManifest(config, async (config) => {
     const mainApplication = config.modResults.manifest.application[0];
@@ -372,8 +348,6 @@ function withCallKeepManifestFix(config) {
         if (!mainApplication['service']) mainApplication['service'] = [];
         mainApplication['service'].push(connectionService);
     }
-    
-    // CRITIQUE ANDROID 14 : Ajout de connectedDevice pour le Bluetooth et camera/mic
     connectionService.$['android:permission'] = 'android.permission.BIND_TELECOM_CONNECTION_SERVICE';
     connectionService.$['android:exported'] = 'true';
     connectionService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall|connectedDevice';
@@ -384,13 +358,11 @@ function withCallKeepManifestFix(config) {
         bgService = { $: { 'android:name': bgServiceName } };
         mainApplication['service'].push(bgService);
     }
-    // Idem pour le service de background
     bgService.$['android:foregroundServiceType'] = 'camera|microphone|phoneCall|connectedDevice';
     return config;
   });
 }
 
-// --- INJECTION PACKAGE ---
 function withMainActivityInjection(config) {
     return withDangerousMod(config, [
         'android',
@@ -414,7 +386,6 @@ function withMainActivityInjection(config) {
     ]);
 }
 
-// --- ACCESSIBILITY ---
 function withAccessibilityService(config) {
   config = withDangerousMod(config, [
     'android',
