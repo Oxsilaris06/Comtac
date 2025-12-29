@@ -4,7 +4,7 @@ const path = require('path');
 
 module.exports = function(config) {
   return withRepoFix(
-    withHeadsetModule(
+    withHeadsetModule( // Ce module contient maintenant la logique AudioFocus
       withMediaSessionGradle(
         withCallKeepManifestFix(
           withAccessibilityService(
@@ -128,7 +128,7 @@ function withMediaSessionGradle(config) {
   });
 }
 
-// --- MODULE HEADSET (BLINDÉ ANTI-CRASH) ---
+// --- MODULE HEADSET + AUDIO FOCUS (VERSION MISE À JOUR) ---
 function withHeadsetModule(config) {
   return withDangerousMod(config, [
     'android',
@@ -136,25 +136,35 @@ function withHeadsetModule(config) {
       const packagePath = path.join(config.modRequest.platformProjectRoot, 'app/src/main/java/com/tactical/comtac');
       if (!fs.existsSync(packagePath)) fs.mkdirSync(packagePath, { recursive: true });
 
+      // Code Java Natif mis à jour pour inclure AudioManager
       const moduleContent = `package com.tactical.comtac;
 
+import android.content.Context;
 import android.content.Intent;
+import android.media.AudioManager;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.os.Build;
 import android.view.KeyEvent;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
+import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 import android.util.Log;
 
-public class HeadsetModule extends ReactContextBaseJavaModule {
+public class HeadsetModule extends ReactContextBaseJavaModule implements AudioManager.OnAudioFocusChangeListener {
     private static MediaSessionCompat mediaSession;
     private final ReactApplicationContext reactContext;
+    private AudioManager audioManager;
+    private AudioFocusRequest focusRequest; // Pour Android 8.0+
 
     public HeadsetModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
+        this.audioManager = (AudioManager) reactContext.getSystemService(Context.AUDIO_SERVICE);
     }
 
     @Override
@@ -162,11 +172,96 @@ public class HeadsetModule extends ReactContextBaseJavaModule {
         return "HeadsetModule";
     }
 
+    // --- GESTION DU FOCUS AUDIO ---
+
+    @ReactMethod
+    public void requestAudioFocus(Promise promise) {
+        try {
+            int result;
+            
+            // Configuration pour la VOIX (VoIP)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                AudioAttributes playbackAttributes = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build();
+
+                focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                        .setAudioAttributes(playbackAttributes)
+                        .setAcceptsDelayedFocusGain(true)
+                        .setOnAudioFocusChangeListener(this)
+                        .build();
+
+                result = audioManager.requestAudioFocus(focusRequest);
+            } else {
+                // Ancienne méthode (Android < 8)
+                result = audioManager.requestAudioFocus(this,
+                        AudioManager.STREAM_VOICE_CALL,
+                        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+            }
+
+            if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                Log.d("HeadsetModule", "Audio Focus GRANTED");
+                promise.resolve(true);
+            } else {
+                Log.d("HeadsetModule", "Audio Focus DENIED");
+                promise.resolve(false);
+            }
+        } catch (Exception e) {
+            Log.e("HeadsetModule", "Error requesting focus", e);
+            promise.reject("FOCUS_ERROR", e);
+        }
+    }
+
+    @ReactMethod
+    public void abandonAudioFocus() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (focusRequest != null) {
+                    audioManager.abandonAudioFocusRequest(focusRequest);
+                }
+            } else {
+                audioManager.abandonAudioFocus(this);
+            }
+            Log.d("HeadsetModule", "Audio Focus ABANDONED");
+        } catch (Exception e) {
+            Log.e("HeadsetModule", "Error abandoning focus", e);
+        }
+    }
+
+    @Override
+    public void onAudioFocusChange(int focusChange) {
+        String eventName = "";
+        switch (focusChange) {
+            case AudioManager.AUDIOFOCUS_GAIN:
+                eventName = "GAIN";
+                break;
+            case AudioManager.AUDIOFOCUS_LOSS:
+                eventName = "LOSS";
+                break;
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                eventName = "LOSS_TRANSIENT";
+                break;
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                eventName = "LOSS_TRANSIENT_CAN_DUCK";
+                break;
+        }
+
+        Log.d("HeadsetModule", "Focus Change: " + eventName);
+        
+        if (reactContext.hasActiveCatalystInstance()) {
+            reactContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                .emit("COMTAC_FOCUS_EVENT", eventName);
+        }
+    }
+
+    // --- GESTION MEDIA SESSION (EXISTANTE) ---
+
     @ReactMethod
     public void startSession() {
         try {
             if (mediaSession != null) {
-                // Déjà actif, on sécurise
                 if (!mediaSession.isActive()) mediaSession.setActive(true);
                 return;
             }
@@ -204,7 +299,7 @@ public class HeadsetModule extends ReactContextBaseJavaModule {
                                     .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
                                     .emit("COMTAC_MEDIA_EVENT", keyEvent.getKeyCode());
                             }
-                            return true; // On consomme l'event
+                            return true;
                         }
                     } catch (Exception e) {
                         Log.e("HeadsetModule", "Error in media button callback", e);
