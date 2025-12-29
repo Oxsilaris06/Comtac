@@ -35,8 +35,7 @@ class HeadsetService {
     public init() {
         this.cleanup();
         
-        // 1. Démarrer le Module Natif (MediaSession)
-        // On vérifie que le module existe pour éviter un crash au démarrage si le link a échoué
+        // Démarrer la session média native
         if (HeadsetModule && HeadsetModule.startSession) {
             console.log("[Headset] Starting Native Media Session");
             try {
@@ -89,7 +88,6 @@ class HeadsetService {
         }
     }
 
-    // --- ECOUTEUR 1 : Native HeadsetModule (MediaSession) ---
     private setupMediaSessionListener() {
         this.mediaSubscription = DeviceEventEmitter.addListener('COMTAC_MEDIA_EVENT', (keyCode: number) => {
             console.log("[Headset] Native Media Event received:", keyCode);
@@ -97,7 +95,6 @@ class HeadsetService {
         });
     }
 
-    // --- ECOUTEUR 2 : Accessibility Service (Backup) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             try {
@@ -113,7 +110,6 @@ class HeadsetService {
     private processKeyCode(keyCode: number, sourceName: string) {
         if (keyCode === KEY_CODES.VOLUME_DOWN) return;
 
-        // Double Volume Up Logic
         if (keyCode === KEY_CODES.VOLUME_UP) {
             const now = Date.now();
             if (now - this.lastVolumeUpTime < 400) {
