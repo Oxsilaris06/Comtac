@@ -1,4 +1,4 @@
-// Learn more https://docs.expo.io/guides/customizing-metro
+// Utiliser @expo/metro-config est plus sûr pour la compatibilité
 const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
