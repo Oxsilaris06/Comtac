@@ -1,8 +1,6 @@
 import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription, DeviceEventEmitter } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
 
-const { HeadsetModule } = NativeModules;
-
 const KEY_CODES = {
     VOLUME_UP: 24, 
     VOLUME_DOWN: 25, 
@@ -28,25 +26,16 @@ class HeadsetService {
     public isHeadsetConnected: boolean = false;
     private eventEmitter: NativeEventEmitter | null = null;
     private subscription: EmitterSubscription | null = null;
-    private mediaSubscription: EmitterSubscription | null = null;
 
     constructor() {}
 
     public init() {
         this.cleanup();
         
-        // Démarrer la session média native
-        if (HeadsetModule && HeadsetModule.startSession) {
-            console.log("[Headset] Starting Native Media Session");
-            try {
-                HeadsetModule.startSession();
-            } catch (e) {
-                console.warn("[Headset] Failed to start native session", e);
-            }
-        }
-
-        this.setupKeyEventListener(); // Via Accessibility (Backup)
-        this.setupMediaSessionListener(); // Via HeadsetModule (Prioritaire)
+        // On n'utilise plus de HeadsetModule.startSession()
+        // C'est CallKeep qui s'occupe de la session.
+        
+        this.setupKeyEventListener(); // Via Accessibility (Backup PTT)
         this.setupConnectionListener();
     }
 
@@ -54,10 +43,6 @@ class HeadsetService {
         if (this.subscription) {
             this.subscription.remove();
             this.subscription = null;
-        }
-        if (this.mediaSubscription) {
-            this.mediaSubscription.remove();
-            this.mediaSubscription = null;
         }
         try {
             if (Platform.OS === 'android') KeyEvent.removeKeyDownListener();
@@ -86,13 +71,6 @@ class HeadsetService {
                 if (this.onConnectionChange) this.onConnectionChange(connected, current);
             });
         }
-    }
-
-    private setupMediaSessionListener() {
-        this.mediaSubscription = DeviceEventEmitter.addListener('COMTAC_MEDIA_EVENT', (keyCode: number) => {
-            console.log("[Headset] Native Media Event received:", keyCode);
-            this.processKeyCode(keyCode, 'MEDIA_SESSION');
-        });
     }
 
     private setupKeyEventListener() {
