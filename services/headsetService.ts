@@ -36,9 +36,14 @@ class HeadsetService {
         this.cleanup();
         
         // 1. Démarrer le Module Natif (MediaSession)
+        // On vérifie que le module existe pour éviter un crash au démarrage si le link a échoué
         if (HeadsetModule && HeadsetModule.startSession) {
             console.log("[Headset] Starting Native Media Session");
-            HeadsetModule.startSession();
+            try {
+                HeadsetModule.startSession();
+            } catch (e) {
+                console.warn("[Headset] Failed to start native session", e);
+            }
         }
 
         this.setupKeyEventListener(); // Via Accessibility (Backup)
@@ -55,10 +60,9 @@ class HeadsetService {
             this.mediaSubscription.remove();
             this.mediaSubscription = null;
         }
-        KeyEvent.removeKeyDownListener();
-        
-        // Arrêt propre du module natif si besoin (optionnel, on veut souvent le garder actif)
-        // if (HeadsetModule) HeadsetModule.stopSession();
+        try {
+            if (Platform.OS === 'android') KeyEvent.removeKeyDownListener();
+        } catch(e) {}
     }
 
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
@@ -89,7 +93,6 @@ class HeadsetService {
     private setupMediaSessionListener() {
         this.mediaSubscription = DeviceEventEmitter.addListener('COMTAC_MEDIA_EVENT', (keyCode: number) => {
             console.log("[Headset] Native Media Event received:", keyCode);
-            // On traite l'événement immédiatement
             this.processKeyCode(keyCode, 'MEDIA_SESSION');
         });
     }
@@ -97,14 +100,17 @@ class HeadsetService {
     // --- ECOUTEUR 2 : Accessibility Service (Backup) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
-            KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                this.processKeyCode(keyEvent.keyCode, 'ACCESSIBILITY');
-            });
+            try {
+                KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
+                    this.processKeyCode(keyEvent.keyCode, 'ACCESSIBILITY');
+                });
+            } catch(e) {
+                console.warn("KeyEvent listener error", e);
+            }
         }
     }
 
     private processKeyCode(keyCode: number, sourceName: string) {
-        // On ignore Vol Down
         if (keyCode === KEY_CODES.VOLUME_DOWN) return;
 
         // Double Volume Up Logic
