@@ -8,9 +8,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-
-// FIX ECRAN BLANC: Retour à l'import legacy stable
-import { Camera } from 'expo-camera'; 
+import { Camera, useCameraPermissions } from 'expo-camera'; 
 
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -22,6 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Magnetometer } from 'expo-sensors';
 import NetInfo from '@react-native-community/netinfo';
 import { Audio } from 'expo-av';
+import InCallManager from 'react-native-incall-manager';
 
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData, AppSettings, DEFAULT_SETTINGS } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
@@ -36,9 +35,7 @@ const generateShortId = () => Math.random().toString(36).substring(2, 10).toUppe
 
 const App: React.FC = () => {
   useKeepAwake();
-  
-  // Utilisation de la méthode legacy pour les permissions
-  const [permission, requestPermission] = Camera.useCameraPermissions();
+  const [permission, requestPermission] = useCameraPermissions();
 
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [user, setUser] = useState<UserData>({
@@ -75,7 +72,6 @@ const App: React.FC = () => {
 
   const [hasConsent, setHasConsent] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
-  
   const [isServicesReady, setIsServicesReady] = useState(false);
   const [gpsStatus, setGpsStatus] = useState<'WAITING' | 'OK' | 'ERROR'>('WAITING');
 
@@ -95,6 +91,9 @@ const App: React.FC = () => {
   }, []);
 
   const applySettings = (s: AppSettings) => {
+      if (s.audioOutput === 'hp') InCallManager.setForceSpeakerphoneOn(true);
+      else if (s.audioOutput === 'casque') InCallManager.setForceSpeakerphoneOn(false);
+
       if (gpsSubscription.current) {
           startGpsTracking(s.gpsUpdateInterval);
       }
@@ -165,7 +164,9 @@ const App: React.FC = () => {
   const mergePeer = useCallback((newPeer: UserData) => {
     setPeers(prev => {
         const next = { ...prev };
-        if (newPeer.id === user.id) return next; 
+        // FIX DOUBLON : On ignore si c'est nous-même
+        if (newPeer.id === user.id) return next;
+        
         const oldId = Object.keys(next).find(key => next[key].callsign === newPeer.callsign && key !== newPeer.id);
         if (oldId) delete next[oldId];
         next[newPeer.id] = newPeer;
@@ -183,7 +184,11 @@ const App: React.FC = () => {
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
-        if (list.length > 0) { list.forEach((u: UserData) => { if(u.id && u.id !== user.id) mergePeer(u); }); }
+        if (list.length > 0) { 
+            list.forEach((u: UserData) => { 
+                if(u.id && u.id !== user.id) mergePeer(u); 
+            }); 
+        }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
       case 'PING':
@@ -309,7 +314,7 @@ const App: React.FC = () => {
     conn.on('open', () => {
       showToast(`CONNECTÉ À ${targetId}`);
       
-      // On lance l'audio session
+      // CRASH FIX: On démarre l'audio maintenant
       audioService.startSession(`CANAL ${targetId}`);
       
       conn.send({ type: 'FULL', user: user });
@@ -350,6 +355,8 @@ const App: React.FC = () => {
                 PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
                 PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
                 PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+                PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+                PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
             ];
 
             if (Platform.Version >= 33) {
@@ -465,11 +472,12 @@ const App: React.FC = () => {
     const role = OperatorRole.OPR;
     setUser(prev => ({ ...prev, role }));
     
-    // Décalage pour laisser l'UI souffler
-    setTimeout(() => {
-        initPeer(role, finalId);
-        setView('ops');
-    }, 100);
+    // Modification: On démarre juste la logique Peer, PAS l'audio session
+    // L'audio session sera lancée dans 'connectToHost' -> 'conn.on(open)'
+    // audioService.startSession(`CANAL ${finalId}`); <-- RETIRÉ ICI
+
+    initPeer(role, finalId);
+    setView('ops');
   };
 
   const handleScannerBarCodeScanned = ({ data }: any) => {
@@ -521,6 +529,7 @@ const App: React.FC = () => {
         <TouchableOpacity onPress={() => { 
             const role = OperatorRole.HOST; 
             setUser(prev => ({ ...prev, role })); 
+            // HOST : On peut démarrer tout de suite car on n'attend pas de handshake
             audioService.startSession("QG TACTIQUE");
             initPeer(role); 
             setView('ops'); 
