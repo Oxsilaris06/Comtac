@@ -1,11 +1,19 @@
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform, EmitterSubscription, DeviceEventEmitter } from 'react-native';
 import KeyEvent from 'react-native-keyevent';
-import MusicControl, { Command } from 'react-native-music-control';
+
+const { HeadsetModule } = NativeModules;
 
 const KEY_CODES = {
-    VOLUME_UP: 24, VOLUME_DOWN: 25, HEADSET_HOOK: 79,     
-    MEDIA_PLAY_PAUSE: 85, MEDIA_NEXT: 87, MEDIA_PREVIOUS: 88,
-    MEDIA_PLAY: 126, MEDIA_PAUSE: 127, MEDIA_STOP: 86, MUTE: 91
+    VOLUME_UP: 24, 
+    VOLUME_DOWN: 25, 
+    HEADSET_HOOK: 79,     
+    MEDIA_PLAY_PAUSE: 85, 
+    MEDIA_NEXT: 87, 
+    MEDIA_PREVIOUS: 88,
+    MEDIA_PLAY: 126, 
+    MEDIA_PAUSE: 127, 
+    MEDIA_STOP: 86,
+    MUTE: 91
 };
 
 type CommandCallback = (source: string) => void;
@@ -19,63 +27,38 @@ class HeadsetService {
     
     public isHeadsetConnected: boolean = false;
     private eventEmitter: NativeEventEmitter | null = null;
-    private subscription: any = null;
+    private subscription: EmitterSubscription | null = null;
+    private mediaSubscription: EmitterSubscription | null = null;
 
     constructor() {}
 
     public init() {
         this.cleanup();
-        this.setupMusicControl(); 
-        this.setupKeyEventListener();
+        
+        // 1. Démarrer le Module Natif (MediaSession)
+        if (HeadsetModule && HeadsetModule.startSession) {
+            console.log("[Headset] Starting Native Media Session");
+            HeadsetModule.startSession();
+        }
+
+        this.setupKeyEventListener(); // Via Accessibility (Backup)
+        this.setupMediaSessionListener(); // Via HeadsetModule (Prioritaire)
         this.setupConnectionListener();
     }
 
-    private setupMusicControl() {
-        MusicControl.enableBackgroundMode(true);
-        MusicControl.handleAudioInterruptions(true); 
-        
-        MusicControl.enableControl('play', true);
-        MusicControl.enableControl('pause', true);
-        MusicControl.enableControl('stop', false);
-        MusicControl.enableControl('nextTrack', true);
-        MusicControl.enableControl('previousTrack', true);
-        MusicControl.enableControl('togglePlayPause', true);
-
-        MusicControl.setNowPlaying({
-            title: 'ComTac',
-            artwork: require('../assets/icon.png'), 
-            artist: 'PTT Ready',
-            color: 0x3b82f6,
-            notificationIcon: 'ic_launcher',
-            isLiveStream: true
-        });
-
-        const handler = (action: string) => { 
-            console.log("[Headset] MusicControl Event:", action);
-            this.triggerCommand(action);
-            MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
-        };
-
-        MusicControl.on(Command.play, () => handler('MEDIA_PLAY'));
-        MusicControl.on(Command.pause, () => handler('MEDIA_PAUSE'));
-        MusicControl.on(Command.togglePlayPause, () => handler('MEDIA_TOGGLE'));
-        MusicControl.on(Command.nextTrack, () => handler('MEDIA_NEXT'));
-        MusicControl.on(Command.previousTrack, () => handler('MEDIA_PREV'));
-        
-        MusicControl.updatePlayback({ state: MusicControl.STATE_PLAYING });
-    }
-
-    public forceNotificationUpdate(isVox: boolean, isTx: boolean) {
-        MusicControl.updatePlayback({
-            state: MusicControl.STATE_PLAYING,
-            title: `ComTac: ${isVox ? (isTx ? "TX..." : "VOX ON") : "PTT"}`,
-            artist: isVox ? "Mode Mains Libres" : "Appuyez pour parler"
-        });
-    }
-
     private cleanup() {
-        if (this.subscription) { this.subscription.remove(); this.subscription = null; }
+        if (this.subscription) {
+            this.subscription.remove();
+            this.subscription = null;
+        }
+        if (this.mediaSubscription) {
+            this.mediaSubscription.remove();
+            this.mediaSubscription = null;
+        }
         KeyEvent.removeKeyDownListener();
+        
+        // Arrêt propre du module natif si besoin (optionnel, on veut souvent le garder actif)
+        // if (HeadsetModule) HeadsetModule.stopSession();
     }
 
     public setCommandCallback(callback: CommandCallback) { this.onCommand = callback; }
@@ -84,42 +67,68 @@ class HeadsetService {
     private setupConnectionListener() {
         if (NativeModules.InCallManager) {
             this.eventEmitter = new NativeEventEmitter(NativeModules.InCallManager);
+            
             this.subscription = this.eventEmitter.addListener('onAudioDeviceChanged', (data) => {
                 let deviceObj = data;
-                if (typeof data === 'string') { try { deviceObj = JSON.parse(data); } catch (e) { return; } }
+                if (typeof data === 'string') {
+                    try { deviceObj = JSON.parse(data); } catch (e) { return; }
+                }
                 if (!deviceObj) return;
+
                 const current = deviceObj.selectedAudioDevice || deviceObj.availableAudioDeviceList?.[0] || 'Speaker';
                 const headsetTypes = ['Bluetooth', 'WiredHeadset', 'Earpiece', 'Headset', 'CarAudio', 'USB_HEADSET', 'AuxLine'];
                 const connected = headsetTypes.some(t => current.includes(t)) && current !== 'Speaker' && current !== 'Phone';
+
                 this.isHeadsetConnected = connected;
                 if (this.onConnectionChange) this.onConnectionChange(connected, current);
             });
         }
     }
 
+    // --- ECOUTEUR 1 : Native HeadsetModule (MediaSession) ---
+    private setupMediaSessionListener() {
+        this.mediaSubscription = DeviceEventEmitter.addListener('COMTAC_MEDIA_EVENT', (keyCode: number) => {
+            console.log("[Headset] Native Media Event received:", keyCode);
+            // On traite l'événement immédiatement
+            this.processKeyCode(keyCode, 'MEDIA_SESSION');
+        });
+    }
+
+    // --- ECOUTEUR 2 : Accessibility Service (Backup) ---
     private setupKeyEventListener() {
         if (Platform.OS === 'android') {
             KeyEvent.onKeyDownListener((keyEvent: { keyCode: number, action: number }) => {
-                if (keyEvent.keyCode === 25) return; 
-                if (keyEvent.keyCode === 24) { 
-                    const now = Date.now();
-                    if (now - this.lastVolumeUpTime < 400) {
-                        this.triggerCommand('DOUBLE_VOL_UP');
-                        this.lastVolumeUpTime = 0;
-                    } else { this.lastVolumeUpTime = now; }
-                    return;
-                }
-                const validKeys = Object.values(KEY_CODES);
-                if (validKeys.includes(keyEvent.keyCode)) {
-                    this.triggerCommand(`KEY_${keyEvent.keyCode}`);
-                }
+                this.processKeyCode(keyEvent.keyCode, 'ACCESSIBILITY');
             });
+        }
+    }
+
+    private processKeyCode(keyCode: number, sourceName: string) {
+        // On ignore Vol Down
+        if (keyCode === KEY_CODES.VOLUME_DOWN) return;
+
+        // Double Volume Up Logic
+        if (keyCode === KEY_CODES.VOLUME_UP) {
+            const now = Date.now();
+            if (now - this.lastVolumeUpTime < 400) {
+                this.triggerCommand(`DOUBLE_VOL_UP_${sourceName}`);
+                this.lastVolumeUpTime = 0;
+            } else {
+                this.lastVolumeUpTime = now;
+            }
+            return;
+        }
+
+        const validKeys = Object.values(KEY_CODES);
+        if (validKeys.includes(keyCode)) {
+            this.triggerCommand(`KEY_${keyCode}_${sourceName}`);
         }
     }
 
     public triggerCommand(source: string) {
         const now = Date.now();
         if (now - this.lastCommandTime < 300) return;
+
         this.lastCommandTime = now;
         if (this.onCommand) this.onCommand(source);
     }

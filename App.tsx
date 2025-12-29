@@ -1,4 +1,4 @@
-import './polyfills'; 
+import './polyfills'; // Toujours en premier
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { 
   StyleSheet, View, Text, TextInput, TouchableOpacity, 
@@ -8,8 +8,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import Peer from 'peerjs';
 import QRCode from 'react-native-qrcode-svg';
-import { Camera, useCameraPermissions } from 'expo-camera'; 
-
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import { useKeepAwake } from 'expo-keep-awake';
 import * as Battery from 'expo-battery';
@@ -22,6 +21,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { Audio } from 'expo-av';
 import InCallManager from 'react-native-incall-manager';
 
+// Imports Types & Services
 import { UserData, OperatorStatus, OperatorRole, ViewType, PingData, AppSettings, DEFAULT_SETTINGS } from './types';
 import { CONFIG, STATUS_COLORS } from './constants';
 import { audioService } from './services/audioService';
@@ -37,7 +37,9 @@ const App: React.FC = () => {
   useKeepAwake();
   const [permission, requestPermission] = useCameraPermissions();
 
+  // --- CONFIGURATION ---
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+
   const [user, setUser] = useState<UserData>({
     id: '', callsign: '', role: OperatorRole.OPR,
     status: OperatorStatus.CLEAR, isTx: false,
@@ -61,6 +63,7 @@ const App: React.FC = () => {
   const [showTrails, setShowTrails] = useState(true);
   const [showPings, setShowPings] = useState(true);
   
+  // État VOX géré par abonnement
   const [voxActive, setVoxActive] = useState(false);
   
   const [showQRModal, setShowQRModal] = useState(false);
@@ -72,6 +75,7 @@ const App: React.FC = () => {
 
   const [hasConsent, setHasConsent] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  
   const [isServicesReady, setIsServicesReady] = useState(false);
   const [gpsStatus, setGpsStatus] = useState<'WAITING' | 'OK' | 'ERROR'>('WAITING');
 
@@ -81,6 +85,7 @@ const App: React.FC = () => {
   const gpsSubscription = useRef<Location.LocationSubscription | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'info' | 'error' } | null>(null);
 
+  // --- INIT CONFIG ---
   useEffect(() => {
       configService.init().then(s => setSettings(s));
       const unsub = configService.subscribe((newSettings) => {
@@ -90,15 +95,19 @@ const App: React.FC = () => {
       return unsub;
   }, []);
 
+  // --- APPLICATION DES REGLAGES ---
   const applySettings = (s: AppSettings) => {
+      // 1. Audio Output
       if (s.audioOutput === 'hp') InCallManager.setForceSpeakerphoneOn(true);
       else if (s.audioOutput === 'casque') InCallManager.setForceSpeakerphoneOn(false);
-
+      
+      // 2. GPS Interval
       if (gpsSubscription.current) {
           startGpsTracking(s.gpsUpdateInterval);
       }
   };
 
+  // --- 1. GESTION RESEAU ---
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const offline = !state.isConnected || !state.isInternetReachable;
@@ -117,17 +126,23 @@ const App: React.FC = () => {
     return unsubscribe;
   }, [isOffline, view, hostId, user.role]);
 
+  // --- 2. ABONNEMENT AUDIO (CORRECTIF VOX) ---
   useEffect(() => {
+      // Le composant s'abonne aux changements d'état du service
+      // C'est la SEULE source de vérité pour l'affichage du bouton VOX
       const unsubscribe = audioService.subscribe((mode) => {
+          console.log("[App] VOX State Update:", mode);
           setVoxActive(mode === 'vox');
       });
       return unsubscribe;
   }, []);
 
+  // --- 3. CAPTEURS PASSIFS ---
   useEffect(() => { AsyncStorage.getItem(CONFIG.TRIGRAM_STORAGE_KEY).then(saved => { if (saved) setLoginInput(saved); }); }, []);
   useEffect(() => { Battery.getBatteryLevelAsync().then(l => setUser(u => ({ ...u, bat: Math.floor(l * 100) }))); const sub = Battery.addBatteryLevelListener(({ batteryLevel }) => setUser(u => ({ ...u, bat: Math.floor(batteryLevel * 100) }))); return () => sub && sub.remove(); }, []);
   useEffect(() => { Magnetometer.setUpdateInterval(100); const sub = Magnetometer.addListener((data) => { let angle = Math.atan2(data.y, data.x) * (180 / Math.PI); angle = angle - 90; if (angle < 0) angle = 360 + angle; setUser(prev => { if (Math.abs(prev.head - angle) > 2) return { ...prev, head: Math.floor(angle) }; return prev; }); }); return () => sub && sub.remove(); }, []);
   
+  // --- 4. BACK HANDLER ---
   useEffect(() => { const backAction = () => { 
       if (view === 'settings') { setView('menu'); return true; }
       if (selectedOperatorId) { setSelectedOperatorId(null); return true; } 
@@ -146,9 +161,12 @@ const App: React.FC = () => {
   const handleLogout = () => {
       if (peerRef.current) peerRef.current.destroy();
       setPeers({}); setPings([]); setHostId(''); setView('login');
+      
       audioService.stopSession();
       if (gpsSubscription.current) { gpsSubscription.current.remove(); gpsSubscription.current = null; }
+      
       audioService.setTx(false); 
+      // Note: voxActive sera mis à jour par le listener audioService.subscribe
       setBannedPeers([]);
       setIsServicesReady(false); 
   };
@@ -164,19 +182,16 @@ const App: React.FC = () => {
   const mergePeer = useCallback((newPeer: UserData) => {
     setPeers(prev => {
         const next = { ...prev };
-        // FIX DOUBLON : On ignore si c'est nous-même
-        if (newPeer.id === user.id) return next;
-        
         const oldId = Object.keys(next).find(key => next[key].callsign === newPeer.callsign && key !== newPeer.id);
         if (oldId) delete next[oldId];
         next[newPeer.id] = newPeer;
         return next;
     });
-  }, [user.id]);
+  }, []);
 
   const handleData = useCallback((data: any, fromId: string) => {
     if (data.from === user.id) return;
-    if (data.user && data.user.id === user.id) return; 
+    if (data.user && data.user.id === user.id) return;
 
     switch (data.type) {
       case 'UPDATE': case 'FULL': case 'UPDATE_USER':
@@ -184,11 +199,7 @@ const App: React.FC = () => {
         break;
       case 'SYNC': case 'SYNC_PEERS':
         const list = data.list || (data.peers ? Object.values(data.peers) : []);
-        if (list.length > 0) { 
-            list.forEach((u: UserData) => { 
-                if(u.id && u.id !== user.id) mergePeer(u); 
-            }); 
-        }
+        if (list.length > 0) { list.forEach((u: UserData) => { if(u.id && u.id !== user.id) mergePeer(u); }); }
         if (data.silence !== undefined) setSilenceMode(data.silence);
         break;
       case 'PING':
@@ -271,7 +282,6 @@ const App: React.FC = () => {
       if (initialRole === OperatorRole.HOST) {
         setHostId(pid);
         showToast(`HÔTE: ${pid}`);
-        audioService.startSession(`CANAL ${pid}`);
       } else if (targetHostId) {
         connectToHost(targetHostId);
       }
@@ -313,10 +323,6 @@ const App: React.FC = () => {
     
     conn.on('open', () => {
       showToast(`CONNECTÉ À ${targetId}`);
-      
-      // CRASH FIX: On démarre l'audio maintenant
-      audioService.startSession(`CANAL ${targetId}`);
-      
       conn.send({ type: 'FULL', user: user });
       const call = peerRef.current!.call(targetId, audioService.stream!);
       call.on('stream', (rs) => audioService.playStream(rs));
@@ -355,8 +361,6 @@ const App: React.FC = () => {
                 PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
                 PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
                 PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-                PermissionsAndroid.PERMISSIONS.CALL_PHONE,
-                PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
             ];
 
             if (Platform.Version >= 33) {
@@ -373,11 +377,14 @@ const App: React.FC = () => {
             }
 
             const results = await PermissionsAndroid.requestMultiple(permsToRequest);
+            console.log('[Permissions] Results:', results);
             
             if (results[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] !== PermissionsAndroid.RESULTS.GRANTED) {
                 showToast("Microphone refusé - Audio inactif", "error");
             }
-        } catch (err) {}
+        } catch (err) {
+            console.warn("[Permissions] Error requesting multiple permissions", err);
+        }
       }
   };
 
@@ -408,13 +415,18 @@ const App: React.FC = () => {
 
   const startServices = async () => {
     if (!hasConsent || isServicesReady) return;
+    
+    console.log("[App] Starting Services Sequence...");
+
     try {
         await checkAllPermissions();
+
         const audioInitResult = await audioService.init();
         if (!audioInitResult) {
             showToast("Erreur init audio - Réessayer", "error");
             return;
         }
+
         audioService.startMetering((state) => {
           const isTransmitting = state === 1;
           if (isTransmitting !== user.isTx) {
@@ -426,7 +438,9 @@ const App: React.FC = () => {
              });
           }
         });
+        
         const locationStatus = await Location.getForegroundPermissionsAsync();
+        
         if (locationStatus.granted) {
             try {
                 const initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -438,15 +452,22 @@ const App: React.FC = () => {
                     }));
                     setGpsStatus('OK');
                 }
-            } catch (e) {}
+            } catch (e) { console.warn("[App] Initial GPS fix failed"); }
+
             startGpsTracking(settings.gpsUpdateInterval);
+            
         } else {
              setGpsStatus('ERROR');
              showToast("GPS non disponible", "error");
         }
+
         if (!permission?.granted) { requestPermission(); }
+
         setIsServicesReady(true);
+        console.log("[App] Services Ready");
+
     } catch (e) {
+        console.error("[App] Start Services Error", e);
         showToast("Erreur critique services", "error");
     }
   };
@@ -461,6 +482,7 @@ const App: React.FC = () => {
     const tri = loginInput.toUpperCase();
     if (tri.length < 2) return;
     try { await AsyncStorage.setItem(CONFIG.TRIGRAM_STORAGE_KEY, tri); } catch (e) {}
+    
     setUser(prev => ({ ...prev, callsign: tri }));
     setView('menu');
   };
@@ -472,9 +494,7 @@ const App: React.FC = () => {
     const role = OperatorRole.OPR;
     setUser(prev => ({ ...prev, role }));
     
-    // Modification: On démarre juste la logique Peer, PAS l'audio session
-    // L'audio session sera lancée dans 'connectToHost' -> 'conn.on(open)'
-    // audioService.startSession(`CANAL ${finalId}`); <-- RETIRÉ ICI
+    audioService.startSession(`CANAL ${finalId}`);
 
     initPeer(role, finalId);
     setView('ops');
@@ -483,7 +503,7 @@ const App: React.FC = () => {
   const handleScannerBarCodeScanned = ({ data }: any) => {
     setShowScanner(false);
     setHostInput(data);
-    setTimeout(() => joinSession(data), 800);
+    setTimeout(() => joinSession(data), 500);
   };
 
   // --- RENDERS ---
@@ -504,6 +524,7 @@ const App: React.FC = () => {
   const renderMenu = () => (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.menuContainer}>
+        {/* BOUTON SETTINGS EN HAUT À DROITE */}
         <View style={{flexDirection: 'row', justifyContent:'space-between', alignItems:'center', marginBottom: 20}}>
             <Text style={styles.sectionTitle}>DÉPLOIEMENT</Text>
             <View style={{flexDirection: 'row', gap: 15}}>
@@ -515,6 +536,8 @@ const App: React.FC = () => {
                 </TouchableOpacity>
             </View>
         </View>
+
+        {/* STATUS BAR (GPS, Services) */}
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 20, backgroundColor: '#18181b', padding: 10, borderRadius: 8}}>
                 {isServicesReady ? (
                     <MaterialIcons name="check-circle" size={16} color="#22c55e" />
@@ -522,14 +545,15 @@ const App: React.FC = () => {
                     <ActivityIndicator size="small" color="#3b82f6" />
                 )}
                 <Text style={{color: '#71717a', fontSize: 10, marginRight: 10}}>SYS</Text>
+                
                 {gpsStatus === 'WAITING' && <MaterialIcons name="gps-not-fixed" size={16} color="#eab308" />}
                 {gpsStatus === 'OK' && <MaterialIcons name="gps-fixed" size={16} color="#22c55e" />}
                 <Text style={{color: '#71717a', fontSize: 10}}>GPS</Text>
         </View>
+
         <TouchableOpacity onPress={() => { 
             const role = OperatorRole.HOST; 
             setUser(prev => ({ ...prev, role })); 
-            // HOST : On peut démarrer tout de suite car on n'attend pas de handshake
             audioService.startSession("QG TACTIQUE");
             initPeer(role); 
             setView('ops'); 
@@ -673,7 +697,7 @@ const App: React.FC = () => {
         </View>
         <View style={styles.controlsRow}>
             <TouchableOpacity 
-                onPress={() => audioService.toggleVox()}
+                onPress={() => audioService.toggleVox()} // CORRECTION: Appel direct
                 style={[styles.voxBtn, voxActive ? {backgroundColor:'#16a34a'} : null]}
             >
                 <MaterialIcons name={voxActive ? 'mic' : 'mic-none'} size={24} color={voxActive ? 'white' : '#a1a1aa'} />
@@ -682,6 +706,7 @@ const App: React.FC = () => {
                 onPressIn={() => { 
                     if(silenceMode && user.role !== OperatorRole.HOST) return; 
                     if(!voxActive) { 
+                        if (user.role !== OperatorRole.HOST) audioService.muteIncoming(true);
                         audioService.setTx(true); 
                         setUser(prev => { const u = {...prev, isTx:true}; broadcast({type:'UPDATE', user:u}); return u; }); 
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); 
@@ -690,6 +715,7 @@ const App: React.FC = () => {
                 onPressOut={() => { 
                     if(!voxActive) { 
                         audioService.setTx(false); 
+                        if (user.role !== OperatorRole.HOST) audioService.muteIncoming(false);
                         setUser(prev => { const u = {...prev, isTx:false}; broadcast({type:'UPDATE', user:u}); return u; }); 
                     }
                 }} 
@@ -703,6 +729,133 @@ const App: React.FC = () => {
             </TouchableOpacity>
         </View>
       </View>
+    </View>
+  );
+
+  return (
+    <View style={styles.container}>
+      <StatusBar style="light" backgroundColor="#000" />
+      <PrivacyConsentModal onConsentGiven={() => setHasConsent(true)} />
+
+      {view === 'login' ? renderLogin() :
+       view === 'menu' ? renderMenu() :
+       view === 'settings' ? <SettingsView onClose={() => setView('menu')} /> :
+       renderDashboard()}
+
+      {/* ... MODALES ... */}
+      <Modal 
+        visible={!!selectedOperatorId} 
+        animationType="fade" 
+        transparent
+        onRequestClose={() => setSelectedOperatorId(null)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedOperatorId(null)}>
+           <View style={[styles.modalContent, { backgroundColor: '#18181b', borderColor: '#333', borderWidth: 1 }]}>
+               
+               <View style={{alignItems: 'center', marginBottom: 20}}>
+                   <Text style={[styles.modalTitle, {color: 'white', marginBottom: 5}]}>ACTION OPÉRATEUR</Text>
+                   <Text style={{color: '#a1a1aa', fontSize: 16, fontWeight: 'bold'}}>
+                       {peers[selectedOperatorId || '']?.callsign || 'Inconnu'}
+                   </Text>
+               </View>
+               
+               <TouchableOpacity 
+                   onPress={() => selectedOperatorId && handleRequestPrivate(selectedOperatorId)} 
+                   style={[styles.modalBtn, {backgroundColor: '#d946ef', marginBottom: 12, width: '100%'}]}
+               >
+                   <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>APPEL PRIVÉ</Text>
+               </TouchableOpacity>
+               
+               {user.role === OperatorRole.HOST && (
+                   <TouchableOpacity 
+                       onPress={() => selectedOperatorId && handleKickUser(selectedOperatorId)} 
+                       style={[styles.modalBtn, {backgroundColor: '#ef4444', marginBottom: 12, width: '100%'}]}
+                   >
+                        <Text style={{color: 'white', fontWeight: 'bold', fontSize: 16}}>BANNIR / KICK</Text>
+                   </TouchableOpacity>
+               )}
+               
+               <TouchableOpacity onPress={() => setSelectedOperatorId(null)} style={{padding: 10, marginTop: 5}}>
+                   <Text style={{color: '#71717a'}}>ANNULER</Text>
+               </TouchableOpacity>
+           </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal visible={showQRModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>MON IDENTITY TAG</Text>
+            <QRCode value={user.id || 'NO_ID'} size={200} />
+            <TouchableOpacity onPress={copyToClipboard}>
+                <Text style={styles.qrId}>{user.id}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowQRModal(false)} style={styles.closeBtn}>
+              <Text style={styles.closeBtnText}>FERMER</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showScanner} animationType="slide">
+        <View style={{flex: 1, backgroundColor: 'black'}}>
+          <CameraView 
+            style={{flex: 1}} 
+            onBarcodeScanned={handleScannerBarCodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: ["qr"],
+            }}
+          />
+          <TouchableOpacity onPress={() => setShowScanner(false)} style={styles.scannerClose}>
+            <MaterialIcons name="close" size={30} color="white" />
+          </TouchableOpacity>
+          <View style={{position: 'absolute', bottom: 50, alignSelf: 'center'}}>
+             <Text style={{color: 'white', backgroundColor: 'rgba(0,0,0,0.5)', padding: 10}}>Scannez le QR Code de l'Hôte</Text>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showPingModal} animationType="fade" transparent>
+         <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, {backgroundColor: '#18181b', borderWidth: 1, borderColor: '#333'}]}>
+               <Text style={[styles.modalTitle, {color: 'white'}]}>ENVOYER PING</Text>
+               <TextInput 
+                  style={styles.pingInput} 
+                  placeholder="Message (ex: ENNEMI)" 
+                  placeholderTextColor="#71717a"
+                  onChangeText={setPingMsgInput}
+                  autoFocus
+               />
+               <View style={{flexDirection: 'row', gap: 10}}>
+                   <TouchableOpacity onPress={() => setShowPingModal(false)} style={[styles.modalBtn, {backgroundColor: '#27272a'}]}>
+                       <Text style={{color: 'white', fontWeight: 'bold'}}>ANNULER</Text>
+                   </TouchableOpacity>
+                   <TouchableOpacity onPress={() => {
+                       if(tempPingLoc && pingMsgInput) {
+                           const newPing: PingData = {
+                               id: Math.random().toString(36).substr(2, 9),
+                               lat: tempPingLoc.lat, lng: tempPingLoc.lng,
+                               msg: pingMsgInput, sender: user.callsign, timestamp: Date.now()
+                           };
+                           setPings(prev => [...prev, newPing]);
+                           broadcast({ type: 'PING', ping: newPing });
+                           setShowPingModal(false);
+                           setPingMsgInput('');
+                           setIsPingMode(false);
+                       }
+                   }} style={[styles.modalBtn, {backgroundColor: '#ef4444'}]}>
+                       <Text style={{color: 'white', fontWeight: 'bold'}}>ENVOYER</Text>
+                   </TouchableOpacity>
+               </View>
+            </View>
+         </View>
+      </Modal>
+
+      {toast && (
+        <View style={[styles.toast, toast.type === 'error' && {backgroundColor: '#ef4444'}]}>
+           <Text style={styles.toastText}>{toast.msg}</Text>
+        </View>
+      )}
     </View>
   );
 };
