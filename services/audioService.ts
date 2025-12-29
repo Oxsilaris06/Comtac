@@ -6,6 +6,7 @@ import uuid from 'react-native-uuid';
 import { VolumeManager } from 'react-native-volume-manager';
 import InCallManager from 'react-native-incall-manager';
 import { headsetService } from './headsetService';
+import { focusService } from './focusService'; // Import du nouveau service
 
 class AudioService {
   stream: MediaStream | null = null;
@@ -28,17 +29,12 @@ class AudioService {
     try {
       console.log("[Audio] Initializing...");
 
-      // 1. D'abord init le HeadsetService (et sa session native potentiellement conflictuelle)
-      // On le fait AVANT MusicControl. Ainsi, quand MusicControl s'initialisera ensuite,
-      // il prendra le dessus (Focus) pour les commandes boutons, ce qui est ce qu'on veut.
+      // 1. Initialisation Headset
       headsetService.init();
 
-      // Listener de secours (au cas où le natif attraperait quand même quelque chose)
       headsetService.setCommandCallback((source) => { 
           console.log("[Audio] Headset Native Command:", source);
           if (this.isSessionActive) this.enforceAudioRoute();
-          // On ne toggle ici que si MusicControl a raté le coche, pour éviter les doublons
-          // Mais généralement MusicControl prendra le relais via ses propres listeners ci-dessous
       });
       
       headsetService.setConnectionCallback((isConnected, type) => { 
@@ -46,10 +42,25 @@ class AudioService {
           this.handleRouteUpdate(isConnected, type); 
       });
 
-      // 2. Configuration de MusicControl (La session "Gagnante")
+      // 2. Configuration du gestionnaire de Focus Audio
+      focusService.setCallbacks(
+          // On Focus Lost (Interruption)
+          () => {
+              console.log("[Audio] Focus LOST - Pausing Transmission");
+              this.setTx(false); // Couper immédiatement l'émission
+              // On pourrait aussi arrêter InCallManager temporairement si nécessaire
+          },
+          // On Focus Gained (Reprise)
+          () => {
+              console.log("[Audio] Focus GAINED - Ready");
+              if (this.isSessionActive) this.enforceAudioRoute();
+          }
+      );
+
+      // 3. Configuration de MusicControl (La session "Gagnante")
       this.setupMusicControl();
 
-      // 3. Préparation du Micro (Sans l'activer pour le moment)
+      // 4. Préparation du Micro
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
@@ -119,6 +130,14 @@ class AudioService {
       
       try {
         console.log("[Audio] Starting Audio Session (Music Mode)");
+        
+        // --- ETAPE CRITIQUE : DEMANDE DE FOCUS NATIF ---
+        const focusGranted = await focusService.requestFocus();
+        if (!focusGranted) {
+            console.warn("[Audio] Could not acquire Native Audio Focus!");
+            // On continue quand même, mais c'est risqué
+        }
+
         this.isSessionActive = true;
 
         // Init initial de la notif
@@ -152,6 +171,8 @@ class AudioService {
       try {
         MusicControl.stopControl();
         InCallManager.stop();
+        // --- LIBÉRATION DU FOCUS ---
+        focusService.abandonFocus();
       } catch(e) {}
       this.isSessionActive = false;
       this.setTx(false);
@@ -226,6 +247,13 @@ class AudioService {
 
   setTx(state: boolean) {
     if (this.isTx === state) return;
+    
+    // Sécurité Focus : Si on n'a pas le focus, interdiction de transmettre
+    if (state && !focusService.hasFocus()) {
+        console.warn("[Audio] Cannot TX: No Audio Focus");
+        return;
+    }
+
     this.isTx = state;
     
     if (this.stream) {
