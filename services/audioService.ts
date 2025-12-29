@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import RNSoundLevel from 'react-native-sound-level';
 import { VolumeManager } from 'react-native-volume-manager';
 import InCallManager from 'react-native-incall-manager';
+import MusicControl, { Command } from 'react-native-music-control'; // Ajouté pour l'UI et Boutons BT
 import { headsetService } from './headsetService';
 import { callKeepService } from './callKeepService';
 
@@ -24,30 +25,31 @@ class AudioService {
     if (this.isInitialized) return true;
 
     try {
-      console.log("[Audio] Initializing...");
+      console.log("[Audio] Initializing Hybrid Service...");
 
-      // 1. Init des services de bas niveau (Accessibility, Hardware buttons)
       headsetService.init();
 
-      // 2. Init CallKeep & Liaison des événements
+      // 1. Setup CallKeep (Le "Moteur" Système)
+      // Il gère la priorité système absolue
       callKeepService.setListeners({
           onMuteToggle: (muted) => {
-              console.log("[Audio] CallKeep Mute Action -> Toggle VOX");
+              // Certains casques envoient cette commande (souvent appui long)
+              console.log("[Audio] CallKeep CMD: Toggle VOX");
               this.toggleVox();
-              // On force le statut "Unmuted" dans CallKeep pour que le bouton ne reste pas bloqué
               callKeepService.setMuted(false);
           },
           onEndCall: () => {
-              console.log("[Audio] CallKeep End Call Action -> Stop Session");
               this.stopSession();
           }
       });
 
-      // Listener Commandes Physiques (Backup via AccessibilityService)
-      // Si CallKeep n'attrape pas le bouton (ex: écran verrouillé sur certains devices),
-      // le service d'accessibilité le fera.
+      // 2. Setup MusicControl (L'Interface Riche & Boutons Play/Pause)
+      // C'est lui qui va afficher la "Grosse Notification" et intercepter les boutons "Musique"
+      this.setupMusicControl();
+
+      // 3. Setup Hardware Keys (Backup Accessibilité)
       headsetService.setCommandCallback((source) => { 
-          console.log("[Audio] Headset Accessibility Command:", source);
+          console.log("[Audio] Hardware CMD:", source);
           if (this.isSessionActive) this.enforceAudioRoute();
           this.toggleVox();
       });
@@ -57,7 +59,6 @@ class AudioService {
           this.handleRouteUpdate(isConnected, type); 
       });
 
-      // 3. Préparation Micro
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
@@ -79,15 +80,62 @@ class AudioService {
     }
   }
 
+  // --- INTERFACE RICHE (MCPTT STYLE) ---
+  private setupMusicControl() {
+      MusicControl.enableBackgroundMode(true);
+      
+      // On active TOUTES les commandes pour maximiser les chances d'interception
+      MusicControl.enableControl('play', true);
+      MusicControl.enableControl('pause', true);
+      MusicControl.enableControl('stop', true);
+      MusicControl.enableControl('nextTrack', true);     
+      MusicControl.enableControl('previousTrack', true); 
+      MusicControl.enableControl('togglePlayPause', true); 
+
+      const triggerSwitch = () => {
+          console.log("[Audio] MusicControl CMD: Toggle VOX");
+          this.toggleVox();
+      };
+
+      // Le bouton Play/Pause du casque déclenchera ça
+      MusicControl.on(Command.play, triggerSwitch);
+      MusicControl.on(Command.pause, triggerSwitch);
+      MusicControl.on(Command.togglePlayPause, triggerSwitch);
+      MusicControl.on(Command.nextTrack, triggerSwitch);
+      MusicControl.on(Command.previousTrack, triggerSwitch);
+      
+      MusicControl.on(Command.stop, () => { this.stopSession(); });
+  }
+
+  private updateMusicNotification(roomName: string) {
+      const isVox = this.mode === 'vox';
+      // On triche un peu : "Playing" = VOX ON, "Paused" = PTT
+      // Cela change l'icône dans la notif et sur l'écran de verrouillage
+      const state = isVox ? MusicControl.STATE_PLAYING : MusicControl.STATE_PAUSED;
+      
+      MusicControl.setNowPlaying({
+          title: isVox ? "VOX ACTIF (ÉCOUTE...)" : "PTT: APPUYEZ POUR PARLER",
+          artwork: require('../assets/icon.png'), // Assurez-vous que l'icône existe
+          artist: 'CANAL: ' + roomName,
+          album: 'ComTac Ops Network',
+          genre: 'Tactical',
+          duration: 0,
+          description: isVox ? 'Parlez maintenant' : 'Mode Silence',
+          color: isVox ? 0xFFef4444 : 0xFF3b82f6, // Rouge / Bleu
+          isLiveStream: true,
+      });
+
+      MusicControl.updatePlayback({
+          state: state,
+          elapsedTime: 0 
+      });
+  }
+
   private enforceAudioRoute() {
-      // Stratégie hybride : On laisse CallKeep gérer le SCO, 
-      // mais on force via InCallManager si nécessaire.
       if (headsetService.isHeadsetConnected) {
-          console.log("[Audio] Enforcing Bluetooth SCO");
           InCallManager.setForceSpeakerphoneOn(false);
           InCallManager.chooseAudioRoute('Bluetooth'); 
       } else {
-          console.log("[Audio] Enforcing Speakerphone");
           InCallManager.setForceSpeakerphoneOn(true);
       }
   }
@@ -96,19 +144,21 @@ class AudioService {
       if (this.isSessionActive) return;
       
       try {
-        console.log("[Audio] Starting Audio Session (CallKeep Mode)...");
+        console.log("[Audio] Starting Hybrid Session...");
         this.isSessionActive = true;
 
-        // 1. On démarre l'appel système (CallKeep)
-        // Cela prend le focus Audio et active le mode communication
+        // 1. Démarrer CallKeep (Fondation Système)
+        // Crée la petite notif appel, prend le SCO, empêche le kill
         callKeepService.startCall("room_1", roomName);
 
-        // 2. On démarre le moteur VoIP (InCallManager)
-        // Il complète CallKeep pour le routage audio spécifique
+        // 2. Démarrer MusicControl (Interface Riche)
+        // Crée la GROSSE notif avec boutons, intercepte Play/Pause
+        this.updateMusicNotification(roomName);
+
+        // 3. Démarrer VoIP
         InCallManager.start({ media: 'audio' });
         InCallManager.setKeepScreenOn(true);
         
-        // 3. Forçage routage initial
         setTimeout(() => { this.enforceAudioRoute(); }, 1000);
 
       } catch (e) {
@@ -120,7 +170,8 @@ class AudioService {
   public stopSession() {
       if (!this.isSessionActive) return;
       try {
-        callKeepService.endCall();
+        callKeepService.endCall(); // Tue l'appel système
+        MusicControl.stopControl(); // Tue la notif riche
         InCallManager.stop();
       } catch(e) {}
       this.isSessionActive = false;
@@ -147,8 +198,11 @@ class AudioService {
         if (this.voxTimer) clearTimeout(this.voxTimer);
     }
     
-    // Feedback optionnel : On pourrait "muter" l'appel CallKeep visuellement quand on est en PTT
-    // callKeepService.setMuted(this.mode === 'ptt'); 
+    // Mettre à jour l'UI Riche (Notification)
+    if (this.isSessionActive) {
+        // On récupère le nom du salon via une variable locale ou on met un defaut
+        this.updateMusicNotification("Tactical Net"); 
+    }
 
     this.notifyListeners(); 
     return this.mode === 'vox'; 
@@ -171,7 +225,6 @@ class AudioService {
   setTx(state: boolean) {
     if (this.isTx === state) return;
     this.isTx = state;
-    
     if (this.stream) {
         this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
