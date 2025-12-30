@@ -10,22 +10,27 @@ interface SettingsViewProps {
 
 export default function SettingsView({ onClose }: SettingsViewProps) {
   const [isVoxEnabled, setIsVoxEnabled] = useState(false);
-  const [isSpeakerOn, setIsSpeakerOn] = useState(false); // Nouvel état
+  const [isSpeakerOn, setIsSpeakerOn] = useState(false);
   const [username, setUsername] = useState('Opérateur');
 
   useEffect(() => {
-    // S'abonner aux changements de l'AudioService
-    const unsubscribe = audioService.subscribe((mode, speaker) => {
+    // 1. Abonnement aux états Audio (VOX / HP)
+    const unsubAudio = audioService.subscribe((mode, speaker) => {
         setIsVoxEnabled(mode === 'vox');
         setIsSpeakerOn(speaker);
     });
     
-    // Charger le nom d'utilisateur
-    configService.getConfig().then(cfg => {
-        if(cfg.username) setUsername(cfg.username);
+    // 2. Abonnement à la Configuration (Pseudo)
+    // CORRECTIF : Utilisation de subscribe() qui existe dans votre fichier configService.ts
+    // au lieu de getConfig() qui n'existait pas.
+    const unsubConfig = configService.subscribe((settings) => {
+        if (settings.username) setUsername(settings.username);
     });
 
-    return unsubscribe;
+    return () => {
+        unsubAudio();
+        unsubConfig();
+    };
   }, []);
 
   const handleVoxToggle = () => {
