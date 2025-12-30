@@ -8,12 +8,12 @@ module.exports = function(config) {
       withMediaSessionGradle(
         withCallKeepManifestFix(
           withAccessibilityService(
-            withKeyEventBuildGradleFix( // <--- C'est ici que la réparation se fait
+            withKeyEventBuildGradleFix(
               withMainActivityInjection(
                 {
                   name: "COM TAC v14",
                   slug: "comtac-v14",
-                  version: "1.0.5",
+                  version: "1.0.6", // Bump version
                   orientation: "portrait",
                   icon: "./assets/icon.png",
                   userInterfaceStyle: "light",
@@ -82,25 +82,18 @@ module.exports = function(config) {
   );
 };
 
-// --- LE FIX CRITIQUE POUR REACT-NATIVE-KEYEVENT ---
+// --- FIX BUILD GRADLE REACT-NATIVE-KEYEVENT ---
 function withKeyEventBuildGradleFix(config) {
   return withDangerousMod(config, [
     'android',
     async (config) => {
-      // On va chercher le fichier build.gradle DANS node_modules
       const file = path.join(config.modRequest.projectRoot, 'node_modules', 'react-native-keyevent', 'android', 'build.gradle');
-      
       if (fs.existsSync(file)) {
         let contents = fs.readFileSync(file, 'utf8');
-        
-        // On force la mise à jour des versions SDK pour correspondre au projet
-        // Cela résout l'erreur "In order to compile Java 9+ source..."
         contents = contents.replace(/compileSdkVersion\s+.*$/gm, 'compileSdkVersion 34');
         contents = contents.replace(/buildToolsVersion\s+.*$/gm, 'buildToolsVersion "34.0.0"');
         contents = contents.replace(/targetSdkVersion\s+.*$/gm, 'targetSdkVersion 33');
         contents = contents.replace(/minSdkVersion\s+.*$/gm, 'minSdkVersion 24');
-        
-        // Patch pour la compatibilité Java
         if (!contents.includes('compileOptions')) {
             contents = contents.replace(/android\s*{/, `android {
     compileOptions {
@@ -108,18 +101,14 @@ function withKeyEventBuildGradleFix(config) {
         targetCompatibility JavaVersion.VERSION_1_8
     }`);
         }
-        
         fs.writeFileSync(file, contents);
-        console.log("✅ Patched react-native-keyevent build.gradle");
-      } else {
-          console.warn("⚠️ react-native-keyevent build.gradle not found at " + file);
       }
       return config;
     },
   ]);
 }
 
-// --- LOGIQUE KOTLIN (L'intercepteur de bouton) ---
+// --- LOGIQUE KOTLIN (CORRIGÉE) ---
 function withTacticalKotlinModule(config) {
   return withDangerousMod(config, [
     'android',
@@ -201,7 +190,7 @@ class TacticalConnectionService : ConnectionService() {
     }
 }`;
 
-      // 3. TacticalModule.kt
+      // 3. TacticalModule.kt (CORRECTION ICI)
       const moduleClass = `package com.tactical.comtac
 
 import android.content.ComponentName
@@ -263,7 +252,7 @@ class TacticalModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
     fun emitEvent(eventName: String, data: String) {
         if (reactApplicationContext.hasActiveCatalystInstance()) {
             reactApplicationContext
-                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class.java)
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java) // <--- CORRECTION: ::class.java
                 .emit(eventName, data)
         }
     }
@@ -384,7 +373,6 @@ function withAccessibilityService(config) {
     }
   ]);
   
-  // Ajout des strings pour l'accessibilité
   config = withStringsXml(config, config => {
       if(!config.modResults.resources.string) config.modResults.resources.string = [];
       if (!config.modResults.resources.string.find(s => s.$.name === "accessibility_service_description")) {
@@ -393,7 +381,6 @@ function withAccessibilityService(config) {
       return config;
   });
   
-  // Fichier Java du service accessibilité
   config = withDangerousMod(config, [
     'android',
     async (config) => {
@@ -431,7 +418,6 @@ public class ComTacAccessibilityService extends AccessibilityService {
     }
   ]);
 
-  // Ajout dans le manifest
   config = withAndroidManifest(config, async (config) => {
       const app = config.modResults.manifest.application[0];
       if (app.service) app.service = app.service.filter(s => s.$['android:name'] !== '.ComTacAccessibilityService');
