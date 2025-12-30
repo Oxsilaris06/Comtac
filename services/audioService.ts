@@ -1,4 +1,3 @@
-
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
 import RNSoundLevel from 'react-native-sound-level';
 import InCallManager from 'react-native-incall-manager';
@@ -8,14 +7,17 @@ import { tacticalNativeService } from './tacticalNativeService';
 class AudioService {
   stream: MediaStream | null = null;
   isTx: boolean = false;
-  mode: 'ptt' | 'vox' = 'ptt'; // 'ptt' = Silence/Manuel, 'vox' = Micro Actif/Auto
+  mode: 'ptt' | 'vox' = 'ptt';
   isSessionActive: boolean = false;
+  
+  // Gestion Sortie Audio
+  isSpeakerOn: boolean = false; // Par défaut sur écouteur/casque si dispo
   
   voxThreshold: number = -35; 
   voxHoldTime: number = 1000; 
   voxTimer: any = null;
   
-  private listeners: ((mode: 'ptt' | 'vox') => void)[] = [];
+  private listeners: ((mode: 'ptt' | 'vox', speaker: boolean) => void)[] = [];
   private isInitialized = false;
 
   async init(): Promise<boolean> {
@@ -23,19 +25,20 @@ class AudioService {
 
     try {
       console.log("[Audio] Initializing (Tactical Native Mode)...");
-
-      // 1. Démarrer le module Kotlin
       await tacticalNativeService.init();
 
-      // 2. Écouter le clic du bouton (Sans timer, sans double clic)
       tacticalNativeService.subscribe((type, value) => {
           if (type === 'COMMAND' && value === 'BUTTON_MAIN') {
-              // Clic détecté -> On bascule le mode VOX
               this.toggleVox();
+          }
+          // Écoute des changements de route audio (ex: Casque débranché)
+          if (type === 'ROUTE') {
+              console.log("[Audio] Route changed to:", value);
+              // Si le Bluetooth se déconnecte, on peut vouloir repasser sur HP auto
+              // ou mettre à jour l'UI
           }
       });
 
-      // 3. Préparer le micro
       try {
         const stream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
         this.stream = stream;
@@ -54,18 +57,18 @@ class AudioService {
     }
   }
 
-  // --- SESSION ---
   public startSession(roomName: string = "Tactical Net") {
       if (this.isSessionActive) return;
       console.log("[Audio] Starting Tactical Call");
       
-      // Lance le mode natif : Priorité Téléphone & Bluetooth activé
       tacticalNativeService.startTacticalCall(roomName);
       
       this.isSessionActive = true;
       InCallManager.start({ media: 'audio' });
       InCallManager.setKeepScreenOn(true);
-      InCallManager.setForceSpeakerphoneOn(false); // Laisser Android gérer le Bluetooth
+      
+      // Applique la configuration audio initiale
+      this.updateAudioRoute();
       
       this.updateNotification();
   }
@@ -78,21 +81,36 @@ class AudioService {
       this.setTx(false);
   }
 
-  // --- LOGIQUE METIER (1 Clic = Toggle) ---
+  // --- GESTION SORTIE AUDIO ---
+  
+  toggleSpeaker() {
+      this.isSpeakerOn = !this.isSpeakerOn;
+      this.updateAudioRoute();
+      this.notifyListeners();
+      return this.isSpeakerOn;
+  }
+
+  private updateAudioRoute() {
+      if (!this.isSessionActive) return;
+
+      if (this.isSpeakerOn) {
+          console.log("[Audio] Forcing Speakerphone ON");
+          InCallManager.setForceSpeakerphoneOn(true);
+      } else {
+          console.log("[Audio] Forcing Speakerphone OFF (Earpiece/Bluetooth)");
+          InCallManager.setForceSpeakerphoneOn(false);
+      }
+  }
+
+  // --- LOGIQUE METIER ---
+
   toggleVox() {
-    // Si on était en PTT (Silence/Standby), on passe en VOX (Actif)
-    // Si on était en VOX (Actif), on passe en PTT (Silence/Standby)
     this.mode = this.mode === 'ptt' ? 'vox' : 'ptt';
-    
     console.log(`[Audio] Headset Button Pressed. New Mode: ${this.mode}`);
 
     if (this.mode === 'ptt') {
-        // Désactivation immédiate du micro
         this.setTx(false);
         if (this.voxTimer) clearTimeout(this.voxTimer);
-    } else {
-        // Activation du VOX : Le micro s'ouvrira dès qu'on parle
-        // Feedback visuel optionnel ou petit son possible ici
     }
 
     this.updateNotification();
@@ -100,10 +118,9 @@ class AudioService {
     return this.mode === 'vox'; 
   }
 
-  // Permet de changer le TX manuellement (via bouton écran)
   toggleTx() {
       if (this.mode === 'vox') {
-          this.mode = 'ptt'; // Quitte le VOX si on appuie sur le bouton écran
+          this.mode = 'ptt'; 
           this.notifyListeners();
       }
       this.setTx(!this.isTx);
@@ -112,11 +129,9 @@ class AudioService {
   setTx(state: boolean) {
     if (this.isTx === state) return;
     this.isTx = state;
-    
     if (this.stream) {
         this.stream.getAudioTracks().forEach(track => { track.enabled = state; });
     }
-    
     if (this.isSessionActive) this.updateNotification();
   }
 
@@ -152,12 +167,12 @@ class AudioService {
       } catch (e) {}
   }
   
-  public subscribe(callback: (mode: 'ptt' | 'vox') => void) {
+  public subscribe(callback: (mode: 'ptt' | 'vox', speaker: boolean) => void) {
       this.listeners.push(callback);
-      callback(this.mode);
+      callback(this.mode, this.isSpeakerOn);
       return () => { this.listeners = this.listeners.filter(l => l !== callback); };
   }
-  private notifyListeners() { this.listeners.forEach(cb => cb(this.mode)); }
+  private notifyListeners() { this.listeners.forEach(cb => cb(this.mode, this.isSpeakerOn)); }
 
   startMetering(callback: (level: number) => void) {
       setInterval(() => { callback(this.isTx ? 1 : 0); }, 200);
